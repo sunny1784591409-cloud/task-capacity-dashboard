@@ -12,6 +12,7 @@ build/
 
 # Local Codex workspace files
 .codex/
+.ssh-github/
 
 # Duplicate local copy; canonical project lives in projects/timeline-template/
 在线项目排期模板/
