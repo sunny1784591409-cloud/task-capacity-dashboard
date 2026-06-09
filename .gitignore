@@ -1,0 +1,17 @@
+# System files
+Thumbs.db
+.DS_Store
+
+# Dependencies and build outputs
+node_modules/
+dist/
+build/
+
+# Logs
+*.log
+
+# Local Codex workspace files
+.codex/
+
+# Duplicate local copy; canonical project lives in projects/timeline-template/
+在线项目排期模板/

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="在线项目排期模板，支持项目大类、环节模板、休息日、假期与图片导出。" />
+    <title>在线项目排期模板</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="hero-bar">
+        <div class="hero-copy">
+          <p class="eyebrow">Timeline Planner</p>
+          <h1>在线项目排期模板</h1>
+        </div>
+        <div class="hero-actions">
+          <span id="saveStatus" class="save-status">已保存</span>
+          <button class="ghost-button" id="jumpPreviewBtn" type="button">查看排期</button>
+          <button class="ghost-button" id="resetBtn" type="button">恢复示例</button>
+          <button class="primary-button" id="exportBtn" type="button">导出图片</button>
+        </div>
+      </header>
+
+      <section class="panel settings-panel">
+        <div class="section-head">
+          <div class="section-title">
+            <span class="section-icon">⚙</span>
+            <div>
+              <p class="eyebrow">Settings</p>
+              <h2>基础设置</h2>
+            </div>
+          </div>
+          <span class="hint-text">修改后会自动重新排期</span>
+        </div>
+        <div class="form-grid">
+          <label>时间表标题<input id="timelineTitle" value="时间表 Timeline" /></label>
+          <label>项目名称<input id="projectName" value="616033书柜项目" /></label>
+          <label>自动交付日期<input id="deliveryDate" type="date" readonly /></label>
+          <label>展示起始周<input id="calendarStart" type="date" value="2026-05-03" /></label>
+          <label>展示周数<input id="weekCount" type="number" min="2" max="12" value="6" /></label>
+        </div>
+        <div class="rule-grid">
+          <label>
+            休息规则
+            <select id="restMode">
+              <option value="none">无休</option>
+              <option value="single">单休（周日）</option>
+              <option value="double" selected>双休（周六/周日）</option>
+            </select>
+          </label>
+          <label>假期开始<input id="holidayStart" type="date" /></label>
+          <label>假期结束<input id="holidayEnd" type="date" /></label>
+        </div>
+      </section>
+
+      <section class="summary-strip" aria-label="排期摘要">
+        <article class="summary-card">
+          <span class="summary-icon blue">▱</span>
+          <div>
+            <span>已选大类</span>
+            <strong id="selectedTypeCount">0</strong>
+          </div>
+        </article>
+        <article class="summary-card">
+          <span class="summary-icon green">☷</span>
+          <div>
+            <span>流程项</span>
+            <strong id="summaryItemCount">0</strong>
+          </div>
+        </article>
+        <article class="summary-card">
+          <span class="summary-icon violet">◷</span>
+          <div>
+            <span>最晚完成</span>
+            <strong id="summaryDelivery">-</strong>
+          </div>
+        </article>
+        <article class="summary-card">
+          <span class="summary-icon orange">▣</span>
+          <div>
+            <span>日历规则</span>
+            <strong id="summaryRules">-</strong>
+          </div>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="section-head project-head">
+          <div>
+            <p class="eyebrow">Project Types</p>
+            <h2>项目大类</h2>
+          </div>
+          <div class="actions">
+            <button class="ghost-button" id="editCommonBtn" type="button">共用环节模板</button>
+            <button class="primary-button" id="addTypeBtn" type="button">新增大类</button>
+          </div>
+        </div>
+        <div id="typeList" class="type-list"></div>
+      </section>
+
+      <section class="panel" id="previewPanel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Preview</p>
+            <h2>当前项目排期</h2>
+          </div>
+          <span id="itemCount" class="status-pill"></span>
+        </div>
+        <div class="timeline-scroll">
+          <div id="timeline" class="timeline"></div>
+        </div>
+      </section>
+    </main>
+
+    <section id="templatePage" class="template-page" hidden>
+      <div class="template-shell">
+        <header class="template-header">
+          <div>
+            <p class="eyebrow">Template Editor</p>
+            <h2 id="templateTitle">自定义模板</h2>
+          </div>
+          <div class="actions">
+            <button class="ghost-button" id="addNodeBtn" type="button">新增节点</button>
+            <button class="primary-button" id="backBtn" type="button">返回排期</button>
+          </div>
+        </header>
+        <p class="template-tip">拖动左侧手柄可调整环节顺序，修改后会自动更新完成时间和日历。</p>
+        <div id="nodeList" class="node-list"></div>
+      </div>
+    </section>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="./script.js"></script>
+  </body>
+</html>
