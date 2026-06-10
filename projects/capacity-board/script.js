@@ -999,7 +999,7 @@ function renderTempTable(board) {
               <td><input class="table-input" data-temp-field="${board}:${task.id}:note" value="${escapeHtml(task.note)}" /></td>
               <td>
                 <select class="table-select" data-temp-field="${board}:${task.id}:assignee">
-                  ${[task.assignee, "吕皇勇", "汤崇武"]
+                  ${[task.assignee, ...tempAssigneeOptions(board)]
                     .filter(Boolean)
                     .filter((person, index, people) => people.indexOf(person) === index)
                     .map((person) => `<option value="${person}"${person === task.assignee ? " selected" : ""}>${person}</option>`)
@@ -1017,6 +1017,10 @@ function renderTempTable(board) {
       }
     </tbody>
   `;
+}
+
+function tempAssigneeOptions(board) {
+  return board === "video" ? ["郑雨豪", "李锦禧"] : ["吕皇勇", "汤崇武"];
 }
 
 function getMonthDays(monthKey) {
@@ -1561,7 +1565,7 @@ function bindEvents() {
       form.sku.value = board === "photo" ? "TMP-P02" : "TMP-V02";
       form.contact.value = board === "photo" ? "王宁" : "许诺";
       form.note.value = board === "photo" ? "临时补拍主图" : "临时补录视频";
-      form.assignee.value = board === "photo" ? "吕皇勇" : "汤崇武";
+      form.assignee.value = board === "photo" ? "吕皇勇" : "郑雨豪";
       form.estimateDays.value = board === "photo" ? 0.5 : 1;
     });
   });
