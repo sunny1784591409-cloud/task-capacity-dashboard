@@ -1469,7 +1469,7 @@ function downloadTemplate(board) {
       : ["sku别名", "产品标题", "产品类型", "样品", "预计到港时间", "最早交期", person, "拍摄内容"];
   const sample =
     board === "video"
-      ? ["615969 Light Gray/Black", "英", "场景视频", "吕皇勇", "待拍摄", "高", "2026-06-02 10:28:32", "", "2"]
+      ? ["615969 Light Gray/Black", "英", "场景视频", "郑雨豪", "待拍摄", "高", "2026-06-02 10:28:32", "", "2"]
       : ["SKU1001", "示例产品标题", "家居", "已到样", "2026-06-03", "2026-06-10", "张三", "AMAZON出图"];
   const csv = `\uFEFF${headers.join(",")}\n${sample.join(",")}\n`;
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
@@ -1488,11 +1488,11 @@ function seedDemo() {
     createImportedTask("photo", { sku: "SKU2048", title: "露营灯", productType: "户外", sample: "样品在库", eta: "2026-06-01", earliestDue: "2026-06-05", assignee: "周航", content: "重点项目" })
   ];
   state.imported.video = [
-    createImportedTask("video", { sku: "VID2201", title: "折叠推车", productType: "户外", sample: "已到样", eta: "2026-06-03", earliestDue: "2026-06-12", assignee: "李哲", content: "安装视频" }),
-    createImportedTask("video", { sku: "VID5088", title: "智能香薰机", productType: "家电", sample: "样品在库", earliestDue: "2026-07-15", assignee: "王珂", content: "AI视频" })
+    createImportedTask("video", { sku: "VID2201", title: "折叠推车", productType: "户外", sample: "已到样", eta: "2026-06-03", earliestDue: "2026-06-12", assignee: "郑雨豪", content: "安装视频" }),
+    createImportedTask("video", { sku: "VID5088", title: "智能香薰机", productType: "家电", sample: "样品在库", earliestDue: "2026-07-15", assignee: "李锦禧", content: "AI视频" })
   ];
   state.temp.photo = [createTempTask("photo", { sku: "TMP-P01", contact: "李想", note: "临时补拍细节", assignee: "陈琳", estimateDays: 1 })];
-  state.temp.video = [createTempTask("video", { sku: "TMP-V01", contact: "赵敏", note: "临时口播素材", assignee: "李哲", estimateDays: 1 })];
+  state.temp.video = [createTempTask("video", { sku: "TMP-V01", contact: "赵敏", note: "临时口播素材", assignee: "郑雨豪", estimateDays: 1 })];
   state.tablePage.photo = 1;
   state.tablePage.video = 1;
   autoSchedule("photo");
