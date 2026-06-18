@@ -1,12 +1,13 @@
 # 重点项目管理系统
 
-当前目录包含两个并列维护的静态项目。两个项目先分别完善到终稿，后续再通过 `shared/` 中的统一数据结构做数据互通。
+当前目录包含三个并列入口。摄影摄像产能看板、重点项目排期模板、重点项目工作台暂时独立运行，后续确认数据关系后再通过 `shared/` 中的统一数据结构做数据互通。
 
 ## 项目入口
 
-- 摄影摄像产能看板：`projects/capacity-board/index.html`
+- 摄影摄像产能看板：`projects/capacity-board/index.html?module=capacity`
 - 在线项目排期模板：`projects/timeline-template/index.html`
-- 根目录 `index.html` 是项目选择页，用于进入两个独立项目。
+- 重点项目工作台：`projects/capacity-board/index.html?module=workbench`
+- 根目录 `index.html` 是一级入口页，用于进入三个独立板块。
 
 ## 在线预览
 
@@ -19,6 +20,7 @@
 ```text
 projects/
   capacity-board/       摄影摄像产能看板
+                        通过 ?module=workbench 进入重点项目工作台
   timeline-template/    在线项目排期模板
 shared/
   schemas/              未来共用数据结构

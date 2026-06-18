@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>摄影摄像产能看板</title>
-    <meta name="description" content="摄影摄像任务导入、临时任务排期和个人 SKU 产能看板。" />
+    <title>拍摄与设计款项目管理系统</title>
+    <meta name="description" content="项目中心、拍摄任务池、产能负载、素材交付和数据复盘管理系统。" />
     <link rel="stylesheet" href="./styles.css" />
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   </head>
@@ -13,13 +13,20 @@
     <main class="app-shell">
       <aside class="sidebar">
         <div class="brand-block">
-          <p class="eyebrow">Production Board</p>
-          <h1>摄影摄像产能看板</h1>
+          <p class="eyebrow" id="appBrandEyebrow">Project Ops</p>
+          <h1 id="appBrandTitle">拍摄与设计款项目管理系统</h1>
         </div>
         <nav class="nav-list" aria-label="主导航">
-          <button class="nav-item active" type="button" data-view="photo">摄影任务后台</button>
+          <button class="nav-item active" type="button" data-view="dashboard">工作台</button>
+          <button class="nav-item" type="button" data-view="projects">项目甘特</button>
+          <button class="nav-item" type="button" data-view="taskpool">任务池</button>
+          <button class="nav-item" type="button" data-view="load">产能负载</button>
+          <button class="nav-item" type="button" data-view="delivery">素材交付</button>
+          <button class="nav-item" type="button" data-view="review">数据复盘</button>
+          <button class="nav-item" type="button" data-view="completedDb">完成数据库</button>
+          <button class="nav-item" type="button" data-view="photo">摄影任务后台</button>
           <button class="nav-item" type="button" data-view="video">摄像任务后台</button>
-          <button class="nav-item" type="button" data-view="capacity">产能看板</button>
+          <button class="nav-item" type="button" data-view="capacity">SKU 产能看板</button>
         </nav>
         <div class="sidebar-note">
           <span>默认双休排期</span>
@@ -38,7 +45,157 @@
           </div>
         </header>
 
-        <section class="board-view active" id="photoView" data-board="photo">
+        <section class="board-view active" id="dashboardView">
+          <section class="prd-hero">
+            <div>
+              <p class="eyebrow">Command Center</p>
+              <h2>拍摄与设计款项目管理系统</h2>
+              <p>基于 PRD v1.0 增加项目、任务、负载、交付与复盘的管理闭环。</p>
+            </div>
+            <div class="prd-hero-actions">
+              <label class="ghost-button file-action">
+                导入项目进度表
+                <input type="file" accept=".xlsx,.xls,.csv" data-workbench-import />
+              </label>
+              <button class="primary-button" type="button" data-open-workbench-task>新建/分配任务</button>
+              <button class="ghost-button" type="button" data-jump-view="projects">查看项目甘特</button>
+            </div>
+          </section>
+          <section class="prd-metric-grid" id="dashboardStats"></section>
+          <section class="prd-dashboard-grid">
+            <div class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Projects</p>
+                  <h3>异常项目</h3>
+                </div>
+              </div>
+              <div id="dashboardProjects"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Load</p>
+                  <h3>本周团队负载</h3>
+                </div>
+              </div>
+              <div id="dashboardLoad"></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Today</p>
+                <h3>今日到期任务</h3>
+              </div>
+            </div>
+            <div id="dashboardToday"></div>
+          </section>
+        </section>
+
+        <section class="board-view" id="projectsView">
+          <section class="panel gantt-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Project Gantt</p>
+                <h3>项目排期甘特图</h3>
+              </div>
+              <div class="header-actions">
+                <button class="ghost-button" type="button" data-workbench-month-prev>上月</button>
+                <button class="ghost-button" type="button" data-workbench-month-today>今天</button>
+                <button class="ghost-button" type="button" data-workbench-month-next>下月</button>
+                <button class="ghost-button" type="button" data-open-workbench-manager>管理项目</button>
+                <button class="primary-button" type="button" data-open-workbench-project>+ 新建项目</button>
+              </div>
+            </div>
+            <div class="gantt-month-title" id="projectGanttMonth"></div>
+            <div id="projectGantt"></div>
+          </section>
+        </section>
+
+        <section class="board-view" id="taskpoolView">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Task Pool</p>
+                <h3>拍摄任务池与分配</h3>
+              </div>
+              <button class="primary-button" type="button" data-open-workbench-task>+ 建任务</button>
+            </div>
+            <div class="prd-filter-row">
+              <span>类型：全部</span>
+              <span>项目：全部</span>
+              <span>只看本周到期</span>
+            </div>
+            <div class="prd-kanban" id="taskPoolColumns"></div>
+          </section>
+        </section>
+
+        <section class="board-view" id="loadView">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Capacity Load</p>
+                <h3>成员周产能负载</h3>
+              </div>
+              <button class="ghost-button" type="button" data-open-workbench-members>产能档案设置</button>
+            </div>
+            <div class="prd-load-table" id="loadTable"></div>
+          </section>
+        </section>
+
+        <section class="board-view" id="deliveryView">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Delivery</p>
+                <h3>素材交付与验收</h3>
+              </div>
+              <button class="ghost-button" type="button" data-export-workbench-delivery>导出交付清单</button>
+            </div>
+            <div id="deliveryList"></div>
+          </section>
+        </section>
+
+        <section class="board-view" id="reviewView">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Review</p>
+                <h3>数据复盘</h3>
+              </div>
+              <button class="ghost-button" type="button" data-export-workbench-review>批量导出报告</button>
+            </div>
+            <div class="prd-review-grid" id="reviewList"></div>
+          </section>
+        </section>
+
+        <section class="board-view" id="completedDbView">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Completed Database</p>
+                <h3>已完成项目数据库</h3>
+              </div>
+              <button class="ghost-button" type="button" data-export-workbench-completed>导出完成数据库</button>
+            </div>
+            <div class="database-toolbar">
+              <input data-completed-db-search placeholder="搜索项目标题 / 系列 / 负责人 / 任务模块" />
+              <select data-completed-db-type>
+                <option value="">全部项目类型</option>
+                <option value="老品风格优化项目">老品风格优化项目</option>
+                <option value="品牌向优化项目-店铺/VI">品牌向优化项目-店铺/VI</option>
+                <option value="设计款营销项目">设计款营销项目</option>
+                <option value="重点视频">重点视频</option>
+                <option value="TK项目">TK项目</option>
+              </select>
+              <span class="status-pill" id="completedDbCount"></span>
+            </div>
+            <div class="completed-db-table" id="completedDbTable"></div>
+          </section>
+        </section>
+
+        <section class="board-view" id="photoView" data-board="photo">
           <div class="workbench-grid">
             <section class="panel">
               <div class="panel-heading">
@@ -354,6 +511,20 @@
           <button class="ghost-button" value="cancel" type="submit">取消</button>
           <button class="primary-button" id="viewCompletedBtn" type="button">查看清单</button>
         </div>
+      </form>
+    </dialog>
+
+    <dialog class="paste-dialog workbench-dialog" id="workbenchDialog">
+      <form method="dialog" id="workbenchDialogForm">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow" id="workbenchDialogEyebrow">Workbench</p>
+            <h3 id="workbenchDialogTitle">编辑</h3>
+          </div>
+          <button class="icon-button" value="cancel" type="submit" aria-label="关闭">×</button>
+        </div>
+        <div id="workbenchDialogBody"></div>
+        <div class="dialog-actions" id="workbenchDialogActions"></div>
       </form>
     </dialog>
 

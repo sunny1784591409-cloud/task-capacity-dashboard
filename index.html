@@ -7,12 +7,15 @@
     <style>
       :root {
         color-scheme: light;
-        --bg: #f4f6f8;
-        --text: #17212f;
-        --muted: #627083;
-        --line: #d9e0e8;
+        --bg: #f4f7f6;
         --surface: #ffffff;
-        --primary: #1f6feb;
+        --surface-soft: #eef6f3;
+        --text: #14211f;
+        --muted: #60706c;
+        --line: #d6e2df;
+        --primary: #0f766e;
+        --primary-dark: #0b5d57;
+        --accent: #b7791f;
       }
 
       * {
@@ -24,17 +27,25 @@
         min-height: 100vh;
         font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
         color: var(--text);
-        background: var(--bg);
+        background:
+          linear-gradient(90deg, rgba(15, 118, 110, 0.05) 1px, transparent 1px),
+          linear-gradient(180deg, rgba(15, 118, 110, 0.05) 1px, transparent 1px),
+          var(--bg);
+        background-size: 28px 28px;
       }
 
       main {
-        width: min(1040px, calc(100% - 40px));
+        width: min(1180px, calc(100% - 44px));
         margin: 0 auto;
         padding: 56px 0;
       }
 
       header {
-        margin-bottom: 28px;
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.55fr);
+        gap: 28px;
+        align-items: end;
+        margin-bottom: 26px;
       }
 
       p {
@@ -44,29 +55,43 @@
       }
 
       h1 {
-        margin: 0 0 10px;
-        font-size: clamp(30px, 4vw, 46px);
-        line-height: 1.15;
+        margin: 0 0 12px;
+        font-size: clamp(32px, 4.5vw, 56px);
+        line-height: 1.08;
+        max-width: 780px;
       }
 
       .eyebrow {
-        margin-bottom: 10px;
+        margin-bottom: 12px;
         font-size: 13px;
-        font-weight: 700;
+        font-weight: 800;
         letter-spacing: 0;
         color: var(--primary);
         text-transform: uppercase;
       }
 
+      .status-panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 18px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .status-panel strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 18px;
+      }
+
       .project-list {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 18px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
       }
 
       .project-card {
         display: flex;
-        min-height: 220px;
+        min-height: 286px;
         padding: 24px;
         border: 1px solid var(--line);
         border-radius: 8px;
@@ -75,32 +100,84 @@
         text-decoration: none;
         flex-direction: column;
         justify-content: space-between;
+        box-shadow: 0 18px 42px rgba(18, 33, 31, 0.08);
+        transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+      }
+
+      .project-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(15, 118, 110, 0.5);
+        box-shadow: 0 22px 48px rgba(18, 33, 31, 0.12);
       }
 
       .project-card h2 {
         margin: 0 0 12px;
-        font-size: 24px;
+        font-size: 25px;
+        line-height: 1.2;
       }
 
-      .project-card span {
+      .card-kicker {
         display: inline-flex;
         width: fit-content;
-        margin-top: 22px;
-        padding: 10px 14px;
+        margin-bottom: 18px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: var(--surface-soft);
+        color: var(--primary-dark);
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .project-card span:not(.card-kicker) {
+        display: inline-flex;
+        width: fit-content;
+        margin-top: 24px;
+        padding: 11px 15px;
         border-radius: 6px;
         background: var(--primary);
         color: #ffffff;
+        font-weight: 800;
+      }
+
+      .project-card:nth-child(2) span:not(.card-kicker) {
+        background: var(--accent);
+      }
+
+      .project-card:nth-child(3) span:not(.card-kicker) {
+        background: var(--primary-dark);
+      }
+
+      .card-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 18px;
+      }
+
+      .card-links small {
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        background: #ffffff;
         font-weight: 700;
       }
 
-      @media (max-width: 760px) {
-        main {
-          width: min(100% - 28px, 1040px);
-          padding: 32px 0;
-        }
-
+      @media (max-width: 980px) {
+        header,
         .project-list {
           grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 640px) {
+        main {
+          width: min(100% - 28px, 1180px);
+          padding: 34px 0;
+        }
+
+        .project-card {
+          min-height: 240px;
         }
       }
     </style>
@@ -108,26 +185,58 @@
   <body>
     <main>
       <header>
-        <p class="eyebrow">Project Hub</p>
-        <h1>重点项目管理系统</h1>
-        <p>两个项目保持独立完善，后续通过统一数据结构逐步打通。</p>
+        <div>
+          <p class="eyebrow">Project Hub</p>
+          <h1>重点项目管理系统</h1>
+          <p>一级页面只做入口分流。摄影摄像产能看板、重点项目排期模板、重点项目工作台暂时保持独立运行，数据不互相同步。</p>
+        </div>
+        <aside class="status-panel" aria-label="系统状态">
+          <strong>当前结构</strong>
+          <p>三个入口并列维护，后续确认数据关系后再统一打通。</p>
+        </aside>
       </header>
 
       <section class="project-list" aria-label="项目入口">
-        <a class="project-card" href="./projects/capacity-board/index.html">
+        <a class="project-card" href="./projects/capacity-board/index.html?module=capacity">
           <div>
+            <span class="card-kicker">Production Board</span>
             <h2>摄影摄像产能看板</h2>
-            <p>用于导入、录入、排期和查看摄影摄像任务产能。</p>
+            <p>用于导入摄影/摄像任务、维护临时任务、自动排期、查看个人 SKU 产能和月度日历。</p>
+            <div class="card-links" aria-hidden="true">
+              <small>摄影任务</small>
+              <small>摄像任务</small>
+              <small>SKU 产能</small>
+            </div>
           </div>
-          <span>进入看板</span>
+          <span>进入产能看板</span>
         </a>
 
         <a class="project-card" href="./projects/timeline-template/index.html">
           <div>
-            <h2>在线项目排期模板</h2>
-            <p>用于单个 SKU 下多项目大类、多物料任务的并行排期。</p>
+            <span class="card-kicker">Timeline Template</span>
+            <h2>重点项目排期模板</h2>
+            <p>用于单个重点项目的多阶段、多物料、多任务并行排期，适合作为项目排期草稿和交付节奏表。</p>
+            <div class="card-links" aria-hidden="true">
+              <small>项目排期</small>
+              <small>阶段管理</small>
+              <small>模板复用</small>
+            </div>
           </div>
-          <span>进入模板</span>
+          <span>进入排期模板</span>
+        </a>
+
+        <a class="project-card" href="./projects/capacity-board/index.html?module=workbench">
+          <div>
+            <span class="card-kicker">Project Ops</span>
+            <h2>重点项目工作台</h2>
+            <p>基于 PRD 新增的项目管理工作台，包含项目中心、任务池、产能负载、素材交付和数据复盘原型。</p>
+            <div class="card-links" aria-hidden="true">
+              <small>工作台</small>
+              <small>任务池</small>
+              <small>复盘</small>
+            </div>
+          </div>
+          <span>进入工作台</span>
         </a>
       </section>
     </main>
