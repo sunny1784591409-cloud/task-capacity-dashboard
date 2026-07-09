@@ -10,7 +10,13 @@ const types = {
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
-  ".csv": "text/csv; charset=utf-8"
+  ".csv": "text/csv; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml"
 };
 
 const server = http.createServer((request, response) => {
@@ -18,7 +24,7 @@ const server = http.createServer((request, response) => {
   const relativePath = pathname === "/" ? "/index.html" : pathname;
   const filePath = path.normalize(path.join(root, relativePath));
 
-  if (!filePath.startsWith(root)) {
+  if (filePath !== root && !filePath.startsWith(root + path.sep)) {
     response.writeHead(403);
     response.end("Forbidden");
     return;

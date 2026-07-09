@@ -3,15 +3,34 @@ const COMPLETED_STORAGE_KEY = "photo-video-temp-completed-db-v1";
 const WORKBENCH_STORAGE_KEY = "project-workbench-v2";
 const LEGACY_KEYS = ["photo-video-capacity-board-v2", "photo-video-capacity-board-v1"];
 const PAGE_SIZE = 10;
+const COMPLETED_DB_PAGE_SIZE = 5;
+const REVIEW_PAGE_SIZE = 4;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PROJECT_TYPES = ["老品风格优化项目", "品牌向优化项目-店铺/VI", "设计款营销项目", "重点视频", "TK项目"];
 const PROJECT_STATUSES = ["待开始", "进行中", "暂停", "已完成"];
 const TASK_MODULES = ["方案制定", "Amazon出图", "NPC出图", "平面排版", "NPC排版", "视频", "TK视频"];
-const TASK_STATUSES = ["待开始", "已分配", "进行中", "已完成", "延期", "暂停"];
+const TASK_STATUSES = ["待开始", "进行中", "已完成", "延期", "暂停"];
+const MANUAL_TASK_STATUSES = ["待开始", "进行中", "已完成", "暂停"];
 const PRIORITIES = ["高", "中", "低"];
+const MEMBER_GROUPS = ["摄影", "摄像", "软装", "3D", "平面"];
+const AUTO_MONTHLY_CAPACITY = 40;
 const DELIVERY_MODULES = ["Amazon出图", "NPC出图", "平面排版", "NPC排版", "视频", "TK视频"];
 const DELIVERY_STATUSES = ["待提交", "待验收", "验收通过", "已驳回", "已完成"];
-const REVIEW_STATUSES = ["草稿", "待提交", "已归档"];
+const DELIVERY_GROUP_MAP = {
+  "Amazon出图": "出图",
+  "NPC出图": "出图",
+  "平面排版": "平面",
+  "NPC排版": "平面",
+  "视频": "视频",
+  "TK视频": "视频"
+};
+const DELIVERY_GROUPS = ["出图", "平面", "视频"];
+const DELIVERY_MAX_WEEK_OFFSET = 3;
+const REVIEW_STATUSES = ["未提交数据", "已提交数据"];
+const REVIEW_GROUPS = [
+  { key: "pending", title: "未提交数据", status: "未提交数据", pageState: "reviewPendingPage" },
+  { key: "submitted", title: "已提交数据", status: "已提交数据", pageState: "reviewSubmittedPage" }
+];
 
 const boardMeta = {
   photo: { label: "摄影", personLabel: "摄影师", eyebrow: "Photography", taskClass: "task-photo", daysPerSku: 2 },
@@ -40,7 +59,7 @@ const viewMeta = {
 
 const viewGroups = {
   workbench: {
-    views: ["dashboard", "projects", "load", "delivery", "review", "completedDb"],
+    views: ["dashboard", "projects", "taskpool", "load", "delivery", "review", "completedDb"],
     defaultView: "dashboard",
     brandEyebrow: "Project Ops",
     brandTitle: "重点项目工作台"
@@ -130,8 +149,15 @@ const initialState = {
   personalMonthOffset: 0,
   personal: null,
   videoScheduleSchemaVersion: 0,
+  deliveryWeekOffset: 0,
+  taskPoolOwner: "",
+  completedDbPage: 1,
   completedDbSearch: "",
   completedDbType: "",
+  reviewSubmittedPage: 1,
+  reviewPendingPage: 1,
+  reviewSearch: "",
+  reviewHighlightId: "",
   workbenchMonthCursor: toMonthKey(new Date())
 };
 
@@ -143,6 +169,7 @@ let personalEdgeSwitchTimer = 0;
 let personalEdgeSwitchedThisDrag = false;
 let ganttResizeDrag = null;
 let ganttDragSource = null;
+let ganttMoveDragTaskId = "";
 let pendingConfirmAction = null;
 cleanupLegacyPastCalendarTasks();
 migrateVideoScheduleDefaults();
@@ -206,12 +233,12 @@ const WORKBENCH_COLUMNS = [
 ];
 
 const WORKBENCH_TASK_MAP = [
-  { module: "方案制定", owner: "planOwner", plannedDate: "planDue", actualDate: "planActual", note: "planNote", progress: "planProgress", group: "方案" },
-  { module: "Amazon出图", owner: "amazonOwner", plannedDate: "amazonDue", actualDate: "amazonActual", progress: "amazonProgress", group: "出图" },
-  { module: "NPC出图", owner: "npcOwner", actualDate: "npcActual", progress: "npcActual", group: "出图" },
+  { module: "方案制定", owner: "planOwner", plannedDate: "planDue", actualDate: "planActual", note: "planNote", progress: "planProgress", group: "软装" },
+  { module: "Amazon出图", owner: "amazonOwner", plannedDate: "amazonDue", actualDate: "amazonActual", progress: "amazonProgress", group: "摄影" },
+  { module: "NPC出图", owner: "npcOwner", actualDate: "npcActual", progress: "npcActual", group: "摄影" },
   { module: "平面排版", owner: "layoutOwner", plannedDate: "layoutDue", actualDate: "layoutActual", progress: "layoutProgress", group: "平面" },
   { module: "NPC排版", owner: "layoutOwner", actualDate: "npcLayoutActual", progress: "npcLayoutActual", group: "平面" },
-  { module: "视频", owner: "videoOwner", plannedDate: "videoDue", actualDate: "videoActual", note: "videoNote", progress: "videoProgress", group: "视频" }
+  { module: "视频", owner: "videoOwner", plannedDate: "videoDue", actualDate: "videoActual", note: "videoNote", progress: "videoProgress", group: "摄像" }
 ];
 
 function parseWorkbenchSeedRows(tsv) {
@@ -305,9 +332,10 @@ function taskFromWorkbenchRow(row, project, definition) {
 function deriveWorkbenchTaskStatus({ owner, actualDate, progress, projectStatus }) {
   const text = String(progress || "");
   if (projectStatus === "暂停") return "暂停";
+  if (projectStatus === "待开始") return "待开始";
   if (actualDate) return "已完成";
   if (text.includes("延期")) return "延期";
-  if (owner) return "已分配";
+  if (owner) return "进行中";
   return "待开始";
 }
 
@@ -323,15 +351,25 @@ function addWorkbenchMember(memberMap, name, group, module) {
     memberMap.set(name, {
       id: slugId("m", name),
       name,
-      group,
-      weeklyCapacity: 40,
+      group: normalizeMemberGroup(group, module),
+      weeklyCapacity: AUTO_MONTHLY_CAPACITY,
       skills: module
     });
     return;
   }
   const member = memberMap.get(name);
-  if (!member.group.includes(group)) member.group = `${member.group}/${group}`;
+  if (!MEMBER_GROUPS.includes(member.group)) member.group = normalizeMemberGroup(member.group, module);
   if (!member.skills.includes(module)) member.skills = `${member.skills} / ${module}`;
+}
+
+function normalizeMemberGroup(group, module = "") {
+  const text = String(group || "").trim();
+  if (MEMBER_GROUPS.includes(text)) return text;
+  if (text.includes("摄像") || text.includes("视频") || String(module).includes("视频")) return "摄像";
+  if (text.includes("平面") || text.includes("排版") || String(module).includes("排版")) return "平面";
+  if (text.includes("3D") || text.includes("三维")) return "3D";
+  if (text.includes("软装") || text.includes("方案") || String(module).includes("方案")) return "软装";
+  return "摄影";
 }
 
 function deliverableFromTask(task, project) {
@@ -349,14 +387,19 @@ function deliverableFromTask(task, project) {
 function reviewFromProject(project, relatedTasks) {
   const completed = relatedTasks.filter((task) => task.status === "已完成").length;
   const delayed = relatedTasks.filter((task) => task.status === "延期").length;
+  const cycle = reviewCycleDaysForProject(project, relatedTasks);
   return normalizeWorkbenchReview({
     id: stableWorkbenchId("r", project.id),
     projectId: project.id,
     platform: project.projectType,
-    status: project.status === "已完成" ? "待提交" : "草稿",
-    planDays: daysBetween(project.startDate, project.finishDate),
-    actualDays: daysBetween(project.startDate, project.finishDate),
+    status: "未提交数据",
+    planDays: cycle.planDays,
+    actualDays: cycle.actualDays,
+    image: project.image,
+    dataDate: "",
     sessions: 0,
+    pageViews: 0,
+    clicks: 0,
     orders: 0,
     conclusion: `共 ${relatedTasks.length} 个任务，已完成 ${completed} 个，延期 ${delayed} 个。`
   });
@@ -388,7 +431,7 @@ function appendTkTemplates(projects, tasks, memberMap) {
         actualDate: "",
         note: stage,
         progress: "待开始",
-        status: "已分配"
+        status: "进行中"
       });
       tasks.push(task);
       addWorkbenchMember(memberMap, owner, taskIndex === 0 ? "方案" : "视频", "TK视频");
@@ -403,8 +446,69 @@ function daysBetween(start, end) {
   return Math.max(0, Math.round((endDate - startDate) / DAY_MS));
 }
 
+function amazonLineEndTaskForProject(projectId, tasks = prdTasks) {
+  return tasks.find((task) => task.projectId === projectId && task.module === "平面排版");
+}
+
+function reviewCycleDaysForProject(project, tasks = prdTasks) {
+  const endTask = amazonLineEndTaskForProject(project?.id, tasks);
+  return {
+    planDays: daysBetween(project?.startDate, endTask?.plannedDate),
+    actualDays: daysBetween(project?.startDate, endTask?.actualDate)
+  };
+}
+
+function reviewCycleDays(review, project) {
+  return reviewCycleDaysForProject(project);
+}
+
 function stableWorkbenchId(prefix, value) {
   return slugId(prefix, value).slice(0, 80);
+}
+
+// 从「设计部26年重点项目进度管理.xlsx」提取的项目图片（Excel 嵌入图无法被导入读取，按标题映射到本地图片）。
+const WORKBENCH_PROJECT_IMAGES = {
+  "594027": "project-images/r40.png",
+  "616376": "project-images/r38.png",
+  "616449": "project-images/r50.png",
+  "616450": "project-images/r51.jpeg",
+  "616456": "project-images/r52.jpeg",
+  "593433 Espresso": "project-images/r10.png",
+  "592992 Light Gray": "project-images/r11.png",
+  "592938 Green/Brown": "project-images/r12.png",
+  "615079 Black-田园": "project-images/r13.png",
+  "615337 AI视频": "project-images/r14.png",
+  "593129 Blue": "project-images/r15.png",
+  "614722 Dark Gray(queen)": "project-images/r16.png",
+  "615079 White-田园": "project-images/r17.png",
+  "615144 Black-现代简约": "project-images/r18.png",
+  "615207 Dark Gray(queen)": "project-images/r19.png",
+  "615144 White": "project-images/r21.png",
+  "615138 Dark Gray(queen)": "project-images/r23.png",
+  "615238 Light Brown": "project-images/r36.png",
+  "616332--2 color": "project-images/r37.png",
+  "593940--3 color": "project-images/r39.png",
+  "615153 Black": "project-images/r41.png",
+  "615153 White": "project-images/r42.png",
+  "616415--2 color": "project-images/r46.png",
+  "616416--2 color": "project-images/r47.png",
+  "594023--2 color": "project-images/r48.png",
+  "616429--2 color": "project-images/r49.png",
+  "616474-2 color": "project-images/r53.png"
+};
+
+function patchWorkbenchProjectImages() {
+  let changed = false;
+  prdProjects.forEach((project) => {
+    const mapped = WORKBENCH_PROJECT_IMAGES[project.title] || WORKBENCH_PROJECT_IMAGES[project.name];
+    if (mapped) {
+      if (project.image !== mapped) { project.image = mapped; changed = true; }
+    } else if (project.image && !/^(data:|https?:|project-images\/)/.test(project.image)) {
+      project.image = "";
+      changed = true;
+    }
+  });
+  return changed;
 }
 
 const WORKBENCH_SEED = buildWorkbenchSeedFromRows(parseWorkbenchSeedRows(WORKBENCH_SEED_TSV), { includeTkTemplates: true });
@@ -449,6 +553,7 @@ function applyWorkbenchData(data) {
   prdTasks.splice(0, prdTasks.length, ...data.tasks);
   prdDeliverables.splice(0, prdDeliverables.length, ...data.deliverables);
   prdReviews.splice(0, prdReviews.length, ...data.reviews);
+  patchWorkbenchProjectImages();
 }
 
 function saveWorkbenchData() {
@@ -482,8 +587,8 @@ function normalizeWorkbenchMember(member) {
   return {
     id: member.id || slugId("m", member.name || "member"),
     name: String(member.name || "未命名成员").trim(),
-    group: String(member.group || "摄影").trim(),
-    weeklyCapacity: Math.max(1, Number(member.weeklyCapacity) || 40),
+    group: normalizeMemberGroup(member.group, member.skills),
+    weeklyCapacity: Math.max(0, Number(member.weeklyCapacity) || AUTO_MONTHLY_CAPACITY),
     skills: String(member.skills || "").trim()
   };
 }
@@ -545,16 +650,32 @@ function normalizeWorkbenchDeliverable(item) {
   };
 }
 
+function normalizeReviewStatus(status) {
+  if (status === "已提交数据" || status === "已归档") return "已提交数据";
+  return "未提交数据";
+}
+
 function normalizeWorkbenchReview(review) {
   return {
     id: review.id || uniqueWorkbenchId("r"),
     projectId: review.projectId || prdProjects[0]?.id || "",
     platform: String(review.platform || "").trim(),
-    status: REVIEW_STATUSES.includes(review.status) ? review.status : "草稿",
+    status: normalizeReviewStatus(review.status),
     planDays: Math.max(0, Number(review.planDays) || 0),
     actualDays: Math.max(0, Number(review.actualDays) || 0),
     sessions: Math.max(0, Number(review.sessions) || 0),
+    pageViews: Math.max(0, Number(review.pageViews) || 0),
+    clicks: Math.max(0, Number(review.clicks) || 0),
     orders: Math.max(0, Number(review.orders) || 0),
+    frontendLink: String(review.frontendLink || "").trim(),
+    ranking: String(review.ranking || "").trim(),
+    dailySales: String(review.dailySales || "").trim(),
+    currentPrice: String(review.currentPrice || "").trim(),
+    promoPeriod: String(review.promoPeriod || "").trim(),
+    clickRate: String(review.clickRate || "").trim(),
+    conversionRate: String(review.conversionRate || "").trim(),
+    dataDate: String(review.dataDate || "").trim(),
+    image: String(review.image || "").trim(),
     conclusion: String(review.conclusion || "").trim()
   };
 }
@@ -1349,10 +1470,58 @@ function renderChrome() {
   $("#viewEyebrow").textContent = meta.eyebrow;
   $("#viewTitle").textContent = boardMeta[state.currentView] ? `${boardMeta[state.currentView].label}任务后台` : meta.title;
   const seedButton = $("#seedBtn");
-  if (seedButton) seedButton.textContent = routeModule === "workbench" ? "管理项目" : "载入示例";
+  if (seedButton) {
+    seedButton.hidden = routeModule === "workbench";
+    seedButton.textContent = routeModule === "workbench" ? "管理项目" : "载入示例";
+  }
 }
 
-function renderPrdViews() {
+function autoCompleteProjects() {
+  let changed = false;
+  prdProjects.forEach((project) => {
+    if (project.status === "已完成") return;
+    const tasks = prdTasks.filter((task) => task.projectId === project.id);
+    if (tasks.length && tasks.every((task) => task.status === "已完成")) {
+      project.status = "已完成";
+      project.lastUpdated = todayKey();
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+function syncTaskStatusWithProject() {
+  let changed = false;
+  prdTasks.forEach((task) => {
+    const project = projectById(task.projectId);
+    if (!project || project.status !== "待开始") return;
+    if (task.actualDate) return;
+    if (task.status !== "待开始") {
+      task.status = "待开始";
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+function ensureCompletedProjectReviews() {
+  let changed = false;
+  prdProjects
+    .filter((project) => project.status === "已完成")
+    .forEach((project) => {
+      if (prdReviews.some((review) => review.projectId === project.id)) return;
+      prdReviews.push(reviewFromProject(project, prdTasks.filter((task) => task.projectId === project.id)));
+      changed = true;
+    });
+  return changed;
+}
+
+function renderPrdViews(options = {}) {
+  const cascadeChanged = applyWorkbenchScheduleCascade();
+  const completedChanged = autoCompleteProjects();
+  const statusSynced = syncTaskStatusWithProject();
+  const reviewChanged = ensureCompletedProjectReviews();
+  if (cascadeChanged || completedChanged || statusSynced || reviewChanged) saveWorkbenchData();
   renderDashboardView();
   renderProjectCenterView();
   renderTaskPoolView();
@@ -1360,6 +1529,7 @@ function renderPrdViews() {
   renderDeliveryView();
   renderReviewView();
   renderCompletedDbView();
+  if (!options.skipGanttTodayScroll) scrollGanttToToday();
 }
 
 function projectById(id) {
@@ -1388,20 +1558,73 @@ function taskBelongsToActiveProject(task) {
   return project && project.status !== "已完成";
 }
 
+function monthWorkdayCount(monthKey) {
+  return daysOfMonth(monthKey).filter((day) => !isWeekend(day)).length;
+}
+
+function workdayCountBetween(start, end) {
+  if (!start || !end || start > end) return 0;
+  let count = 0;
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    if (!isWeekend(cursor)) count += 1;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return count;
+}
+
+function memberMonthlyCapacity(member, monthKey) {
+  const value = Number(member.weeklyCapacity);
+  if (!Number.isFinite(value) || value <= 0 || value === AUTO_MONTHLY_CAPACITY) return monthWorkdayCount(monthKey);
+  return value;
+}
+
+function taskEstimatedLoadRange(task) {
+  const project = projectById(task?.projectId);
+  const end = toDate(displayPlannedDate(task) || task?.plannedDate || task?.baselinePlannedDate || task?.dueDate);
+  if (!task || !project || !end) return null;
+  const explicitStart = taskGanttStartDate(task);
+  if (explicitStart) return { start: explicitStart > end ? end : explicitStart, end };
+  const sequences = projectScheduleSequences(project);
+  for (const sequence of sequences) {
+    const index = sequence.findIndex((item) => item.id === task.id);
+    if (index < 0) continue;
+    const previousEnd = index > 0 ? toDate(displayPlannedDate(sequence[index - 1]) || sequence[index - 1].plannedDate || sequence[index - 1].baselinePlannedDate) : null;
+    let start = previousEnd ? addDays(previousEnd, 1) : toDate(project.startDate) || end;
+    if (start > end) start = end;
+    return { start, end };
+  }
+  let start = toDate(project.startDate) || end;
+  if (start > end) start = end;
+  return { start, end };
+}
+
+function taskMonthLoadDays(task, monthKey) {
+  if (task.status === "暂停" || task.status === "已完成") return 0;
+  const range = taskEstimatedLoadRange(task);
+  const month = fullMonthRange(monthKey);
+  if (!range || !rangesOverlap(range.start, range.end, month.start, month.end)) return 0;
+  return workdayCountBetween(dateMax(range.start, month.start), dateMin(range.end, month.end));
+}
+
 function taskStatusClass(status) {
   if (["延期", "已驳回", "超载"].includes(status)) return "danger";
   if (["待开始", "待验收", "待提交", "暂停"].includes(status)) return "warning";
-  if (["已完成", "验收通过", "已归档", "已分配"].includes(status)) return "success";
+  if (["已完成", "验收通过", "已归档"].includes(status)) return "success";
   return "neutral";
 }
 
 function memberLoad(member) {
+  const monthKey = workbenchMonthKey();
   const owned = activeTasks().filter((task) => splitPeople(task.owner).includes(member.name));
   const unfinished = owned.filter((task) => !["已完成"].includes(task.status)).length;
+  const doing = owned.filter((task) => task.status === "进行中").length;
   const delayed = owned.filter((task) => task.status === "延期").length;
   const completed = owned.filter((task) => task.status === "已完成").length;
-  const rate = Math.round((unfinished / member.weeklyCapacity) * 100);
-  return { assigned: unfinished, unfinished, delayed, completed, rate };
+  const loadDays = owned.reduce((sum, task) => sum + taskMonthLoadDays(task, monthKey), 0);
+  const capacityDays = memberMonthlyCapacity(member, monthKey);
+  const rate = capacityDays ? Math.round((loadDays / capacityDays) * 100) : 0;
+  return { assigned: unfinished, unfinished, doing, delayed, completed, loadDays, capacityDays, monthKey, rate };
 }
 
 function renderDashboardView() {
@@ -1433,25 +1656,34 @@ function renderDashboardView() {
 
   const projectRoot = $("#dashboardProjects");
   if (projectRoot) {
+    const delayedCount = (project) => prdTasks.filter((task) => task.projectId === project.id && task.status === "延期").length;
     projectRoot.innerHTML = prdProjects
-      .filter((project) => project.status === "进行中" || project.status === "暂停")
+      .filter((project) => project.status === "进行中")
+      .sort((left, right) => delayedCount(right) - delayedCount(left))
       .slice(0, 8)
-      .map((project) => prdProjectMiniCard(project))
-      .join("") || `<p class="empty-copy">当前没有进行中或暂停项目。</p>`;
+      .map((project) => prdProjectMiniCard(project, delayedCount(project)))
+      .join("") || `<p class="empty-copy">当前没有进行中项目。</p>`;
   }
 
   const loadRoot = $("#dashboardLoad");
   if (loadRoot) {
     loadRoot.innerHTML = prdMembers
+      .map((member) => ({ member, rate: memberLoad(member).rate }))
+      .sort((left, right) => right.rate - left.rate)
       .slice(0, 4)
-      .map((member) => prdLoadRow(member))
+      .map(({ member }) => prdLoadRow(member))
       .join("");
   }
 
   const todayRoot = $("#dashboardToday");
   if (todayRoot) {
+    const dueDate = (task) => toDate(displayPlannedDate(task) || task.plannedDate);
     const dueTasks = prdTasks
-      .filter((task) => taskBelongsToActiveProject(task) && (task.status === "延期" || (task.plannedDate && task.plannedDate <= todayKey() && task.status !== "已完成")))
+      .filter((task) => {
+        const project = projectById(task.projectId);
+        return project?.status !== "暂停" && taskBelongsToActiveProject(task) && (task.status === "延期" || (task.plannedDate && task.plannedDate <= todayKey() && task.status !== "已完成"));
+      })
+      .sort((left, right) => (dueDate(left)?.getTime() || 0) - (dueDate(right)?.getTime() || 0))
       .slice(0, 5);
     todayRoot.innerHTML = dueTasks.length
       ? dueTasks.map((task) => prdTaskLine(task)).join("")
@@ -1459,14 +1691,14 @@ function renderDashboardView() {
   }
 }
 
-function prdProjectMiniCard(project) {
+function prdProjectMiniCard(project, delayedTasks = 0) {
   return `
     <article class="prd-list-card prd-clickable" data-workbench-project="${escapeHtml(project.id)}" role="button" tabindex="0">
       <div>
         <strong>${escapeHtml(project.title)}</strong>
         <small>${escapeHtml(project.projectType)} · ${escapeHtml(project.currentNode || "未设置节点")} · 启动 ${displayDate(project.startDate) || "-"}</small>
       </div>
-      <span class="prd-tag ${taskStatusClass(project.status)}">${project.status}</span>
+      <span class="prd-tag ${delayedTasks > 0 ? "danger" : taskStatusClass(project.status)}">${delayedTasks} 个延期任务</span>
     </article>
   `;
 }
@@ -1488,7 +1720,6 @@ function renderProjectCenterView() {
   const gantt = $("#projectGantt");
   const monthTitle = $("#projectGanttMonth");
   if (!gantt) return;
-  applyWorkbenchScheduleCascade();
   const monthKey = workbenchMonthKey();
   state.workbenchMonthCursor = monthKey;
   const days = daysOfMonth(monthKey);
@@ -1506,7 +1737,7 @@ function renderProjectCenterView() {
     ? `
       <div class="project-gantt" style="--gantt-days:${days.length}">
         <div class="gantt-left-head">
-          <span>项目标题</span>
+          <span>项目/任务</span>
           <span>图片</span>
           <span>项目类型</span>
         </div>
@@ -1517,7 +1748,6 @@ function renderProjectCenterView() {
       </div>
     `
     : `<p class="empty-copy">当前月份没有实际进行或预计进行的项目。</p>`;
-  scrollGanttToToday();
 }
 
 function prdProjectCard(project) {
@@ -1557,7 +1787,7 @@ function workbenchMonthKey() {
   return toMonthKey(date);
 }
 
-function monthRange(monthKey) {
+function fullMonthRange(monthKey) {
   const days = daysOfMonth(monthKey);
   return { start: days[0], end: days[days.length - 1] };
 }
@@ -1584,7 +1814,90 @@ function displayPlannedDate(task) {
 }
 
 function taskGanttDate(task) {
+  if (!task) return null;
   return toDate(task.actualDate || displayPlannedDate(task));
+}
+
+function taskGanttStartDate(task) {
+  return toDate(task.ganttStartDate);
+}
+
+function taskPlannedReferenceDate(task) {
+  return toDate(displayPlannedDate(task) || task.plannedDate || task.baselinePlannedDate || task.dueDate);
+}
+
+function autoLineNote(note, prefix, text) {
+  const pattern = new RegExp(`(?:^|\\n)${prefix}：[^\\n]*`, "g");
+  const base = String(note || "").replace(pattern, "").trim();
+  return [base, `${prefix}：${text}`].filter(Boolean).join("\n");
+}
+
+function ganttCompletionState(task, actualDateKey = task?.actualDate) {
+  const actual = toDate(actualDateKey);
+  if (!task || !actual) return { label: "", className: "" };
+  const planned = taskPlannedReferenceDate(task);
+  if (!planned) return { label: "正常完成", className: "on-time" };
+  const diff = Math.round((actual - planned) / DAY_MS);
+  if (diff < 0) return { label: `提前完成 ${Math.abs(diff)}天`, className: "early" };
+  if (diff > 0) return { label: `延期完成 ${diff}天`, className: "late" };
+  return { label: "正常完成", className: "on-time" };
+}
+
+function completionSummaryText(task) {
+  const completion = ganttCompletionState(task);
+  if (!completion.label || !task.actualDate) return "";
+  return `${completion.label}，实际完成 ${displayDate(task.actualDate) || "-"}，预计完成 ${displayDate(displayPlannedDate(task) || task.plannedDate) || "-"}。`;
+}
+
+function applyManualCompletionSummary(task) {
+  if (task.status !== "已完成" || !task.actualDate) return false;
+  const summary = completionSummaryText(task);
+  if (!summary) return false;
+  const nextNote = autoLineNote(task.note, "完成总结", summary);
+  const changed = task.note !== nextNote || task.progress !== summary;
+  task.note = nextNote;
+  task.progress = summary;
+  task.completionState = ganttCompletionState(task).label;
+  return changed;
+}
+
+function isWorkbenchTaskOverdue(task) {
+  if (!task || task.status === "已完成" || task.status === "暂停" || task.actualDate) return false;
+  const project = projectById(task.projectId);
+  if (project && (project.status === "待开始" || project.status === "暂停")) return false;
+  const planned = toDate(displayPlannedDate(task) || task.plannedDate);
+  const today = toDate(todayKey());
+  return Boolean(planned && today && today > planned);
+}
+
+function applyWorkbenchOverdueState(task) {
+  if (!isWorkbenchTaskOverdue(task)) return false;
+  const remark = `预计完成 ${displayDate(displayPlannedDate(task) || task.plannedDate) || "-"}，今日已晚于预计完成时间。`;
+  const nextNote = autoLineNote(task.note, "延期提醒", remark);
+  const changed = task.status !== "延期" || task.note !== nextNote || task.progress !== remark;
+  task.status = "延期";
+  task.note = nextNote;
+  task.progress = remark;
+  return changed;
+}
+
+function commitWorkbenchActualDateChange(task, dateKey, options = {}) {
+  const targetDate = toDate(dateKey);
+  if (!task || !targetDate) return false;
+  const preserveDuration = options.preserveDuration !== false;
+  const project = projectById(task.projectId);
+  if (project?.projectType === "TK项目" && preserveDuration) {
+    const currentEnd = taskGanttDate(task) || targetDate;
+    const currentStart = taskGanttStartDate(task) || currentEnd;
+    const durationDays = Math.max(1, Math.round((currentEnd - currentStart) / DAY_MS) + 1);
+    task.ganttStartDate = toDateKey(addDays(targetDate, 1 - durationDays));
+  }
+  task.actualDate = toDateKey(targetDate);
+  touchProjectUpdated(task.projectId);
+  applyWorkbenchScheduleCascade();
+  saveWorkbenchData();
+  renderPrdViews({ skipGanttTodayScroll: true });
+  return true;
 }
 
 function workbenchTaskOrder(module) {
@@ -1612,37 +1925,55 @@ function projectScheduleSequences(project) {
   return [tasks.filter((task) => task.module !== "TK视频").sort((a, b) => workbenchTaskOrder(a.module) - workbenchTaskOrder(b.module))].filter((sequence) => sequence.length > 1);
 }
 
+function isTaskBlockedByPreviousIncomplete(task) {
+  const project = projectById(task?.projectId);
+  if (!project || project.projectType === "TK项目" || task.status === "已完成") return false;
+  return projectScheduleSequences(project).some((sequence) => {
+    const index = sequence.findIndex((item) => item.id === task.id);
+    if (index <= 0) return false;
+    return sequence[index - 1].status !== "已完成";
+  });
+}
+
 function applyWorkbenchScheduleCascade() {
+  let changed = false;
   prdTasks.forEach((task) => {
     task.displayPlannedDate = task.plannedDate;
-    if (!task.baselinePlannedDate && task.plannedDate) task.baselinePlannedDate = task.plannedDate;
+    if (!task.baselinePlannedDate && task.plannedDate) {
+      task.baselinePlannedDate = task.plannedDate;
+      changed = true;
+    }
+    if (applyManualCompletionSummary(task)) changed = true;
   });
   activeProjects().forEach((project) => {
     projectScheduleSequences(project).forEach((sequence) => {
       sequence.forEach((task, index) => {
-        if (!index || task.actualDate) return;
+        if (!index) return;
         const previous = sequence[index - 1];
-        if (!previous.actualDate) return;
         const previousBase = toDate(previous.baselinePlannedDate || previous.plannedDate);
         const currentBase = toDate(task.baselinePlannedDate || task.plannedDate);
-        const previousActual = toDate(previous.actualDate);
-        if (!previousBase || !currentBase || !previousActual) return;
+        const previousEnd = toDate(previous.actualDate || displayPlannedDate(previous) || previous.plannedDate);
+        if (!previousBase || !currentBase || !previousEnd) return;
         const originalGap = Math.max(1, Math.round((currentBase - previousBase) / DAY_MS));
-        const shifted = addDays(previousActual, originalGap);
-        const existing = toDate(task.displayPlannedDate || task.plannedDate);
-        if (!existing || shifted > existing) {
-          task.displayPlannedDate = toDateKey(shifted);
-          task.plannedDate = toDateKey(shifted);
-          task.dueDate = task.plannedDate;
-        }
+        const shifted = addDays(previousEnd, originalGap);
+        if (task.actualDate) return;
+        const nextPlannedDate = toDateKey(shifted);
+        if (task.plannedDate !== nextPlannedDate || task.dueDate !== nextPlannedDate) changed = true;
+        task.displayPlannedDate = toDateKey(shifted);
+        task.plannedDate = task.displayPlannedDate;
+        task.dueDate = task.plannedDate;
       });
     });
   });
+  prdTasks.forEach((task) => {
+    if (applyWorkbenchOverdueState(task)) changed = true;
+  });
+  return changed;
 }
 
 function projectGanttRange(project) {
   const tasks = prdTasks.filter((task) => task.projectId === project.id);
-  const dates = [project.startDate, project.finishDate, ...tasks.flatMap((task) => [displayPlannedDate(task), task.actualDate])].map(toDate).filter(Boolean);
+  const dates = [project.startDate, project.finishDate, ...tasks.flatMap((task) => [task.ganttStartDate, displayPlannedDate(task), task.actualDate])].map(toDate).filter(Boolean);
   if (!dates.length) return { start: null, end: null };
   return {
     start: new Date(Math.min(...dates.map((date) => date.getTime()))),
@@ -1652,7 +1983,7 @@ function projectGanttRange(project) {
 
 function projectInGanttMonth(project, monthKey) {
   const range = projectGanttRange(project);
-  const month = monthRange(monthKey);
+  const month = fullMonthRange(monthKey);
   if (rangesOverlap(range.start, range.end, month.start, month.end)) return true;
   return prdTasks.some((task) => task.projectId === project.id && dateInRange(taskGanttDate(task), month.start, month.end));
 }
@@ -1671,7 +2002,7 @@ function ganttLegend() {
   return `
     <div class="gantt-legend" aria-label="甘特图颜色说明">
       <span><i class="plan"></i>待开始</span>
-      <span><i class="doing"></i>已分配/进行中</span>
+      <span><i class="doing"></i>进行中</span>
       <span><i class="done"></i>已完成</span>
       <span><i class="risk"></i>延期</span>
       <span><i class="paused"></i>暂停</span>
@@ -1692,6 +2023,9 @@ function compareGanttTasks(left, right) {
 function ganttProjectRow(project, days) {
   const lanes = projectGanttLanes(project, days);
   const rowCount = Math.max(1, lanes.length);
+  const hasTasks = prdTasks.some((task) => task.projectId === project.id);
+  const startMarker = !hasTasks && project.status === "待开始" ? ganttProjectStartMarker(project, days) : "";
+  const typeIndex = Math.max(0, PROJECT_TYPES.indexOf(project.projectType));
   return `
     <div class="gantt-project-left prd-clickable" data-workbench-project-manage="${escapeHtml(project.id)}" role="button" tabindex="0" style="--task-rows:${rowCount}">
       <div class="gantt-project-title">
@@ -1699,14 +2033,26 @@ function ganttProjectRow(project, days) {
         <small>${escapeHtml(project.series || "未填系列")} · ${project.status}</small>
       </div>
       ${ganttProjectImage(project)}
-      <span class="prd-tag ${taskStatusClass(project.status)}">${escapeHtml(project.projectType)}</span>
+      <span class="prd-tag project-type-${typeIndex}">${escapeHtml(project.projectType)}</span>
     </div>
-    <div class="gantt-project-timeline" data-workbench-gantt-project="${escapeHtml(project.id)}" style="--task-rows:${rowCount}">
-      ${days.map((day) => ganttDropCell(day, rowCount)).join("")}
+    <div class="gantt-project-timeline" data-workbench-gantt-project="${escapeHtml(project.id)}" data-workbench-project-manage="${escapeHtml(project.id)}" style="--task-rows:${rowCount}">
+      ${days.map((day, index) => ganttDropCell(day, rowCount, index + 1)).join("")}
       ${lanes.map((lane, index) => ganttLaneLabel(lane, index + 1)).join("")}
       ${lanes.flatMap((lane, index) => lane.segments.map((segment) => ganttTaskBar(segment, days, index + 1, lane.label))).join("")}
-      ${lanes.some((lane) => lane.segments.length) ? "" : `<span class="gantt-empty-row">本月暂无子任务节点</span>`}
+      ${startMarker}
+      ${lanes.some((lane) => lane.segments.length) || startMarker ? "" : `<span class="gantt-empty-row">本月暂无子任务节点</span>`}
     </div>
+  `;
+}
+
+function ganttProjectStartMarker(project, days) {
+  const startKey = toDateKey(project.startDate);
+  const columnIndex = days.findIndex((day) => toDateKey(day) === startKey);
+  if (columnIndex < 0) return "";
+  return `
+    <span class="gantt-start-marker" style="grid-column:${columnIndex + 1}; grid-row:1" title="项目启动：${escapeHtml(displayDate(startKey) || "-")}">
+      启动
+    </span>
   `;
 }
 
@@ -1716,7 +2062,8 @@ function projectGanttFocusDate(projectId) {
     .filter((task) => taskGanttDate(task))
     .sort(compareGanttTasks);
   const pending = tasks.find((task) => !task.actualDate && taskGanttDate(task));
-  return toDateKey(taskGanttDate(pending || tasks[0]));
+  const focus = pending || tasks[0];
+  return focus ? toDateKey(taskGanttDate(focus)) : "";
 }
 
 function scrollGanttToDate(dateKey, behavior = "auto") {
@@ -1734,7 +2081,7 @@ function scrollGanttToDate(dateKey, behavior = "auto") {
 }
 
 function scrollGanttToToday() {
-  const range = monthRange(workbenchMonthKey());
+  const range = fullMonthRange(workbenchMonthKey());
   const today = toDate(todayKey());
   if (!dateInRange(today, range.start, range.end)) return;
   scrollGanttToDate(todayKey());
@@ -1756,10 +2103,13 @@ function scrollGanttToProjectDate(projectId) {
 function ganttTaskSegmentRange(task, laneTasks, index, project, mode = "continuous") {
   const end = taskGanttDate(task);
   if (!end) return null;
-  if (mode === "single") return { start: end, end };
+  if (mode === "single") {
+    const start = taskGanttStartDate(task) || end;
+    return { start: start > end ? end : start, end };
+  }
   const previousEnd = index > 0 ? taskGanttDate(laneTasks[index - 1]) : null;
   const projectStart = toDate(project.startDate);
-  let start = previousEnd || projectStart || end;
+  let start = previousEnd ? addDays(previousEnd, 1) : projectStart || end;
   if (start > end) start = end;
   return { start, end };
 }
@@ -1850,12 +2200,13 @@ function ganttLaneLabel(lane, rowIndex) {
 
 function ganttProjectImage(project) {
   const image = String(project.image || "").trim();
-  if (!image) return `<span class="gantt-project-image fallback">${escapeHtml(project.title.slice(0, 1) || "-")}</span>`;
-  return `<span class="gantt-project-image"><img src="${escapeHtml(image)}" alt="${escapeHtml(project.title)}" /></span>`;
+  const fallbackChar = escapeHtml(project.title.slice(0, 1) || "-");
+  if (!image) return `<span class="gantt-project-image fallback" data-fallback="${fallbackChar}"></span>`;
+  return `<span class="gantt-project-image" data-fallback="${fallbackChar}"><img src="${escapeHtml(image)}" alt="${escapeHtml(project.title)}" onerror="this.closest('.gantt-project-image').classList.add('fallback');this.remove()" /></span>`;
 }
 
-function ganttDropCell(day, rowCount) {
-  return `<div class="gantt-drop-cell ${isWeekend(day) ? "weekend" : ""} ${toDateKey(day) === todayKey() ? "today" : ""}" style="grid-row:1 / span ${rowCount}" data-workbench-gantt-date="${toDateKey(day)}"></div>`;
+function ganttDropCell(day, rowCount, columnIndex) {
+  return `<div class="gantt-drop-cell ${isWeekend(day) ? "weekend" : ""} ${toDateKey(day) === todayKey() ? "today" : ""}" style="grid-column:${columnIndex}; grid-row:1 / span ${rowCount}" data-gantt-column="${columnIndex}" data-workbench-gantt-date="${toDateKey(day)}"></div>`;
 }
 
 function ganttTaskBar(segment, days, rowIndex, laneLabel = "") {
@@ -1872,15 +2223,20 @@ function ganttTaskBar(segment, days, rowIndex, laneLabel = "") {
   const dateLabel = `${task.actualDate ? "实际完成" : "预计完成"} ${displayDate(completionKey)}`;
   const rangeLabel = `${displayDate(toDateKey(segment.start)) || "-"} 至 ${displayDate(completionKey) || "-"}`;
   const ownerLabel = task.owner || "待分配";
+  const completion = task.status === "已完成" ? ganttCompletionState(task) : { label: "", className: "" };
+  const completionClass = completion.className ? `completion-${completion.className}` : "";
+  const metaLabel = completion.label ? `${ownerLabel} · ${completion.label}` : ownerLabel;
   const chainClass = segment.segmentCount <= 1 ? "chain-single" : segment.segmentIndex === 0 ? "chain-start" : segment.segmentIndex === segment.segmentCount - 1 ? "chain-end" : "chain-middle";
+  const densityClass = span <= 1 ? "gantt-tiny" : span <= 2 ? "gantt-compact" : "";
+  const tooltipText = `${laneLabel ? `${laneLabel} · ` : ""}${task.title}\n${rangeLabel}\n${dateLabel}\n${metaLabel}`;
   const resizeHandles = canDragGanttActualDate(task)
     ? `<span class="gantt-resize-handle right" draggable="true" data-workbench-gantt-resize="${escapeHtml(task.id)}:end" aria-label="调整实际完成日期"></span>`
     : "";
   return `
-    <button class="gantt-task-bar ${ganttTaskClass(task)} ${chainClass}" type="button" draggable="true" data-workbench-gantt-task="${escapeHtml(task.id)}" data-workbench-task="${escapeHtml(task.id)}" title="${escapeHtml(`${laneLabel ? `${laneLabel} · ` : ""}${task.title} · ${rangeLabel} · ${dateLabel} · ${ownerLabel}`)}" style="grid-column:${startIndex + 1} / span ${span}; grid-row:${rowIndex}">
+    <button class="gantt-task-bar ${ganttTaskClass(task)} ${completionClass} ${chainClass} ${densityClass}" type="button" draggable="true" data-workbench-gantt-task="${escapeHtml(task.id)}" data-workbench-task="${escapeHtml(task.id)}" data-tooltip="${escapeHtml(tooltipText)}" aria-label="${escapeHtml(tooltipText.replace(/\n/g, " · "))}" style="grid-column:${startIndex + 1} / span ${span}; grid-row:${rowIndex}">
       ${resizeHandles}
       <span>${escapeHtml(task.module)}</span>
-      <small>${escapeHtml(ownerLabel)}</small>
+      <small>${escapeHtml(metaLabel)}</small>
     </button>
   `;
 }
@@ -1888,8 +2244,9 @@ function ganttTaskBar(segment, days, rowIndex, laneLabel = "") {
 function ganttTaskClass(task) {
   const status = task.status;
   if (status === "已完成") return "done";
-  if (status === "延期") return "risk";
-  if (status === "进行中" || status === "已分配") return "doing";
+  if (isTaskBlockedByPreviousIncomplete(task)) return "plan";
+  if (status === "延期" || isWorkbenchTaskOverdue(task)) return "risk";
+  if (status === "进行中") return "doing";
   if (status === "暂停") return "paused";
   return "plan";
 }
@@ -1899,9 +2256,7 @@ function moveWorkbenchTaskToDate(taskId, dateKey) {
   if (!task) return;
   const targetDate = toDate(dateKey);
   if (!targetDate) return;
-  task.actualDate = toDateKey(targetDate);
-  saveWorkbenchData();
-  renderPrdViews();
+  commitWorkbenchActualDateChange(task, toDateKey(targetDate));
   showToast(`${task.module} 实际完成时间已调整到 ${displayDate(dateKey)}。`);
 }
 
@@ -1910,42 +2265,85 @@ function resizeWorkbenchTaskActualDate(taskId, edge, dateKey) {
   const targetDate = toDate(dateKey);
   if (!task || !targetDate || !canDragGanttActualDate(task)) return;
   if (edge !== "end") return;
-  task.actualDate = toDateKey(targetDate);
-  saveWorkbenchData();
-  renderPrdViews();
+  const project = projectById(task.projectId);
+  if (project?.projectType === "TK项目" && !task.ganttStartDate) {
+    task.ganttStartDate = toDateKey(taskGanttDate(task) || targetDate);
+  }
+  const startDate = taskGanttStartDate(task);
+  const finalDate = startDate && targetDate < startDate ? startDate : targetDate;
+  commitWorkbenchActualDateChange(task, toDateKey(finalDate), { preserveDuration: false });
   showToast(`${task.module} 实际完成时间已调整到 ${displayDate(task.actualDate)}。`);
 }
 
 function clearGanttResizePreview() {
   $$(".gantt-resize-preview").forEach((item) => item.remove());
+  $$(".gantt-drop-cell.drop-target").forEach((item) => item.classList.remove("drop-target"));
   document.body.classList.remove("gantt-is-resizing");
 }
 
+function ganttDateTargetFromEvent(event) {
+  const directCell = event.target.closest("[data-workbench-gantt-date]");
+  if (directCell) return { cell: directCell, dateKey: directCell.dataset.workbenchGanttDate };
+  const timeline = event.target.closest("[data-workbench-gantt-project]");
+  if (!timeline) return null;
+  const cells = $$("[data-workbench-gantt-date]", timeline);
+  if (!cells.length) return null;
+  const pointedCell = cells.find((cell) => {
+    const rect = cell.getBoundingClientRect();
+    return event.clientX >= rect.left && event.clientX <= rect.right;
+  });
+  if (pointedCell) return { cell: pointedCell, dateKey: pointedCell.dataset.workbenchGanttDate };
+  const fallbackCell = cells
+    .map((cell) => {
+      const rect = cell.getBoundingClientRect();
+      return { cell, distance: Math.abs(event.clientX - (rect.left + rect.width / 2)) };
+    })
+    .sort((left, right) => left.distance - right.distance)[0]?.cell;
+  return fallbackCell ? { cell: fallbackCell, dateKey: fallbackCell.dataset.workbenchGanttDate } : null;
+}
+
 function updateGanttResizePreview(taskId, dateKey) {
+  const task = prdTasks.find((item) => item.id === taskId);
   const bar = $(`[data-workbench-gantt-task="${CSS.escape(taskId)}"]`);
   const targetCell = bar?.closest("[data-workbench-gantt-project]")?.querySelector(`[data-workbench-gantt-date="${dateKey}"]`);
-  if (!bar || !targetCell) return;
-  clearGanttResizePreview();
+  if (!task || !bar || !targetCell) return;
   const timeline = bar.closest("[data-workbench-gantt-project]");
+  if (!timeline) return;
+  $$(".gantt-resize-preview").forEach((item) => {
+    if (item.parentElement !== timeline) item.remove();
+  });
   const startColumn = Number(String(bar.style.gridColumn || "").match(/^(\d+)/)?.[1] || 1);
-  const targetColumn = Number(String(targetCell.style.gridColumn || "").match(/^(\d+)/)?.[1] || 0) || Array.from(targetCell.parentElement.children).indexOf(targetCell) + 1;
-  const endColumn = Math.max(startColumn, targetColumn);
-  const preview = document.createElement("span");
-  preview.className = "gantt-resize-preview";
+  const rawTargetColumn = Number(targetCell.dataset.ganttColumn || 0) || Number(String(targetCell.style.gridColumn || "").match(/^(\d+)/)?.[1] || 0) || startColumn;
+  const endColumn = Math.max(startColumn, rawTargetColumn);
+  const adjustedCell = rawTargetColumn < startColumn ? timeline.querySelector(`[data-gantt-column="${startColumn}"]`) : targetCell;
+  const adjustedDateKey = adjustedCell?.dataset.workbenchGanttDate || dateKey;
+  const completion = ganttCompletionState(task, adjustedDateKey);
+  const preview = $(".gantt-resize-preview", timeline) || document.createElement("span");
+  preview.className = `gantt-resize-preview ${completion.className ? `completion-${completion.className}` : ""}`;
   preview.style.gridColumn = `${startColumn} / span ${Math.max(1, endColumn - startColumn + 1)}`;
   preview.style.gridRow = bar.style.gridRow || "1";
-  preview.textContent = `实际 ${displayDate(dateKey)}`;
-  timeline.appendChild(preview);
+  preview.textContent = `${displayDate(adjustedDateKey)}${completion.label ? ` · ${completion.label}` : ""}`;
+  if (!preview.parentElement) timeline.appendChild(preview);
   document.body.classList.add("gantt-is-resizing");
+}
+
+function taskPoolOwnerOptions() {
+  const owners = [...new Set(activeTasks().flatMap((task) => splitPeople(task.owner)))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+  const selected = state.taskPoolOwner || "";
+  return [`<option value="">全部负责人</option>`, ...owners.map((name) => `<option value="${escapeHtml(name)}" ${name === selected ? "selected" : ""}>${escapeHtml(name)}</option>`)].join("");
 }
 
 function renderTaskPoolView() {
   const root = $("#taskPoolColumns");
   if (!root) return;
-  const columns = TASK_STATUSES;
-  root.innerHTML = columns
+  const ownerSelect = $("[data-taskpool-owner]");
+  if (ownerSelect) ownerSelect.innerHTML = taskPoolOwnerOptions();
+  const owner = state.taskPoolOwner || "";
+  const inScope = (task) =>
+    taskBelongsToActiveProject(task) && (!owner || splitPeople(task.owner).includes(owner));
+  root.innerHTML = TASK_STATUSES
     .map((status) => {
-      const tasks = prdTasks.filter((task) => task.status === status && taskBelongsToActiveProject(task));
+      const tasks = prdTasks.filter((task) => task.status === status && inScope(task));
       return `
         <section class="prd-kanban-column">
           <h3>${status} <span>${tasks.length}</span></h3>
@@ -1958,6 +2356,7 @@ function renderTaskPoolView() {
 
 function prdTaskCard(task) {
   const project = projectById(task.projectId);
+  const blocked = isTaskBlockedByPreviousIncomplete(task);
   return `
     <article class="prd-task-card prd-clickable" data-workbench-task="${escapeHtml(task.id)}" role="button" tabindex="0">
       <div class="prd-card-head">
@@ -1966,21 +2365,81 @@ function prdTaskCard(task) {
       </div>
       <strong>${escapeHtml(task.title)}</strong>
       <small>${escapeHtml(project?.title || "未关联项目")}</small>
+      ${blocked ? `<span class="prd-tag warning prd-blocked-tag">待前置完成</span>` : ""}
       <div class="prd-card-foot">
         <span>预计 ${displayDate(task.plannedDate) || "-"}</span>
         <span>实际 ${displayDate(task.actualDate) || "-"}</span>
       </div>
       <p>${task.owner ? `负责人：${escapeHtml(task.owner)}` : "负责人：待分配"}${task.progress ? ` · ${escapeHtml(task.progress)}` : ""}</p>
+      ${prdTaskQuickActions(task)}
     </article>
   `;
+}
+
+function prdTaskQuickActions(task) {
+  const buttons = [];
+  if (task.status === "待开始") buttons.push(`<button class="ghost-button prd-quick-btn" type="button" data-task-quick="start:${escapeHtml(task.id)}">开始</button>`);
+  if (task.status !== "已完成") buttons.push(`<button class="primary-button prd-quick-btn" type="button" data-task-quick="done:${escapeHtml(task.id)}">完成</button>`);
+  return buttons.length ? `<div class="prd-card-actions">${buttons.join("")}</div>` : "";
+}
+
+function quickUpdateWorkbenchTask(taskId, action) {
+  const task = prdTasks.find((item) => item.id === taskId);
+  if (!task) return;
+  if (action === "start") {
+    task.status = "进行中";
+  } else if (action === "done") {
+    task.status = "已完成";
+    if (!task.actualDate) task.actualDate = todayKey();
+  } else {
+    return;
+  }
+  touchProjectUpdated(task.projectId);
+  saveWorkbenchData();
+  renderPrdViews({ skipGanttTodayScroll: true });
+  showToast(action === "done" ? `${task.module} 已标记完成。` : `${task.module} 已开始。`);
 }
 
 function renderLoadView() {
   const root = $("#loadTable");
   if (!root) return;
+  const monthKey = workbenchMonthKey();
   root.innerHTML = `
-    <div class="prd-load-head"><span>成员</span><span>组别</span><span>未完成</span><span>延期</span><span>负载</span><span>擅长模块</span></div>
-    ${prdMembers.map((member) => prdLoadRow(member, true)).join("")}
+    <div class="load-month-note">
+      <div>
+        <strong>${monthLabel(monthKey)} 月负载</strong>
+        <span>默认月产能按当月工作日计算：${monthWorkdayCount(monthKey)} 日</span>
+      </div>
+      <div class="load-month-actions">
+        <button class="ghost-button" type="button" data-workbench-month-prev>上月</button>
+        <button class="ghost-button" type="button" data-workbench-month-today>本月</button>
+        <button class="ghost-button" type="button" data-workbench-month-next>下月</button>
+      </div>
+    </div>
+    ${MEMBER_GROUPS.map((group) => prdLoadGroup(group)).join("")}
+  `;
+}
+
+function prdLoadGroup(group) {
+  const members = prdMembers
+    .filter((member) => normalizeMemberGroup(member.group, member.skills) === group)
+    .sort((left, right) => memberLoad(right).rate - memberLoad(left).rate || left.name.localeCompare(right.name, "zh-CN"));
+  const visible = members.slice(0, 5);
+  const folded = members.slice(5);
+  return `
+    <section class="prd-load-group">
+      <div class="prd-load-group-title">
+        <h4>${escapeHtml(group)}</h4>
+        <span>${members.length} 位成员</span>
+      </div>
+      <div class="prd-load-head"><span>成员</span><span>进行中</span><span>未完成</span><span>延期</span><span>月负载</span><span>月产能</span><span>负载</span><span>擅长模块</span></div>
+      ${visible.length ? visible.map((member) => prdLoadRow(member, true)).join("") : `<p class="empty-copy">当前没有${escapeHtml(group)}组成员。</p>`}
+      ${
+        folded.length
+          ? `<details class="prd-load-fold"><summary>展开其余 ${folded.length} 位成员</summary>${folded.map((member) => prdLoadRow(member, true)).join("")}</details>`
+          : ""
+      }
+    </section>
   `;
 }
 
@@ -1990,62 +2449,281 @@ function prdLoadRow(member, detailed = false) {
   return `
     <div class="prd-load-row ${detailed ? "prd-clickable" : ""}" ${detailed ? `data-workbench-member="${escapeHtml(member.id)}" role="button" tabindex="0"` : ""}>
       <strong>${escapeHtml(member.name)}</strong>
-      <span>${member.group}</span>
+      <span>${load.doing} 项</span>
       <span>${load.unfinished} 项</span>
       <span>${load.delayed} 项</span>
+      <span>${load.loadDays} 日</span>
+      <span>${load.capacityDays} 日</span>
       <div class="prd-load-bar"><i class="${level}" style="width:${Math.min(load.rate, 100)}%"></i><b>${load.rate}%</b></div>
       ${detailed ? `<span>${escapeHtml(member.skills)}</span>` : ""}
     </div>
   `;
 }
 
-function renderDeliveryView() {
-  const root = $("#deliveryList");
-  if (!root) return;
-  syncWorkbenchDeliverables();
-  root.innerHTML = prdDeliverables
-    .filter((item) => {
-      const project = projectById(item.projectId);
-      return project && project.status !== "已完成";
-    })
-    .map((item) => {
-      const project = projectById(item.projectId);
+function memberCurrentTasks(member) {
+  return activeTasks()
+    .filter((task) => splitPeople(task.owner).includes(member.name))
+    .sort((left, right) => {
+      const dateDiff = (toDate(displayPlannedDate(left) || left.plannedDate)?.getTime() || 0) - (toDate(displayPlannedDate(right) || right.plannedDate)?.getTime() || 0);
+      if (dateDiff) return dateDiff;
+      return workbenchTaskOrder(left.module) - workbenchTaskOrder(right.module);
+    });
+}
+
+function memberProjectRows(member) {
+  const tasks = memberCurrentTasks(member);
+  const projectIds = [...new Set(tasks.map((task) => task.projectId).filter(Boolean))];
+  if (!projectIds.length) return `<p class="empty-copy">当前没有负责中的项目。</p>`;
+  return projectIds
+    .map((projectId) => {
+      const project = projectById(projectId);
+      const projectTasks = tasks.filter((task) => task.projectId === projectId);
+      if (!project) return "";
       return `
-        <article class="prd-list-card prd-clickable" data-workbench-delivery="${escapeHtml(item.id)}" role="button" tabindex="0">
-          <div>
-            <strong>${escapeHtml(item.name)}</strong>
-            <small>${escapeHtml(project?.title || project?.name || "-")} · ${escapeHtml(item.spec)} · ${escapeHtml(item.link || "暂无链接")}</small>
+        <article class="member-project-row prd-clickable" data-workbench-project="${escapeHtml(project.id)}" role="button" tabindex="0">
+          <div class="member-project-main">
+            <div class="member-project-title">
+              <strong>${escapeHtml(project.title)}</strong>
+              <div class="member-task-chips">${projectTasks.map(memberTaskChip).join("")}</div>
+            </div>
+            <small>${escapeHtml(project.projectType)} · ${escapeHtml(project.currentNode || "未设置节点")} · 启动 ${displayDate(project.startDate) || "-"}</small>
           </div>
-          <span class="prd-tag ${taskStatusClass(item.status)}">${item.status}</span>
+          <span class="prd-tag ${taskStatusClass(project.status)}">${project.status}</span>
         </article>
       `;
     })
     .join("");
 }
 
+function memberTaskChip(task) {
+  const range = taskEstimatedLoadRange(task);
+  const rangeLabel = range ? `${displayDate(toDateKey(range.start)) || "-"} 至 ${displayDate(toDateKey(range.end)) || "-"}` : "未设置预计周期";
+  return `<span class="member-task-chip ${ganttTaskClass(task)}" title="${escapeHtml(task.module)}：${escapeHtml(rangeLabel)}">${escapeHtml(task.module)}</span>`;
+}
+
+function memberTaskStatusLegend() {
+  return `
+    <div class="member-task-legend" aria-label="任务状态颜色说明">
+      <span><i class="member-task-chip plan"></i>待开始</span>
+      <span><i class="member-task-chip doing"></i>进行中</span>
+      <span><i class="member-task-chip done"></i>已完成</span>
+      <span><i class="member-task-chip risk"></i>延期</span>
+      <span><i class="member-task-chip paused"></i>暂停</span>
+    </div>
+  `;
+}
+
+function openMemberProjectsDialog(memberId) {
+  const member = prdMembers.find((item) => item.id === memberId);
+  if (!member) return;
+  const load = memberLoad(member);
+  openWorkbenchDialog({
+    eyebrow: "Member Load",
+    title: `${member.name} 当前负责项目`,
+    body: `
+      <div class="member-detail-top">
+        <div class="member-load-summary">
+          <span>组别：${escapeHtml(member.group)}</span>
+          <span>进行中：${load.doing} 项</span>
+          <span>未完成：${load.unfinished} 项</span>
+          <span>延期：${load.delayed} 项</span>
+          <span>${monthLabel(load.monthKey)} 负载：${load.loadDays}/${load.capacityDays} 日</span>
+        </div>
+        ${memberTaskStatusLegend()}
+      </div>
+      <div class="member-project-list">${memberProjectRows(member)}</div>
+    `,
+    actions: `
+      <button class="ghost-button" value="cancel" type="submit">关闭</button>
+      <button class="primary-button" type="button" data-open-workbench-members>编辑成员档案</button>
+    `
+  });
+}
+
+function clampDeliveryWeekOffset(value) {
+  return Math.max(0, Math.min(DELIVERY_MAX_WEEK_OFFSET, Number(value) || 0));
+}
+
+function startOfWeekMonday(date) {
+  const day = date.getDay();
+  return addDays(date, day === 0 ? -6 : 1 - day);
+}
+
+function deliveryWeekRange(offset) {
+  const start = addDays(startOfWeekMonday(toDate(todayKey())), offset * 7);
+  return { start, end: addDays(start, 6) };
+}
+
+function deliveryWeekText(offset) {
+  if (offset === 0) return "本周";
+  if (offset === 1) return "下周";
+  return `${offset} 周后`;
+}
+
+function deliveryTaskDueDate(task) {
+  return toDate(displayPlannedDate(task) || task.plannedDate);
+}
+
+function isDeliveryEligibleTask(task) {
+  if (task.status === "已完成" || task.actualDate) return false;
+  if (!DELIVERY_MODULES.includes(task.module)) return false;
+  const project = projectById(task.projectId);
+  if (!project || project.status === "已完成" || project.status === "暂停") return false;
+  return true;
+}
+
+function deliveryTasksForWeek(offset) {
+  const { start, end } = deliveryWeekRange(offset);
+  const isCurrentWeek = offset === 0;
+  return prdTasks
+    .filter((task) => {
+      if (!isDeliveryEligibleTask(task)) return false;
+      if (task.status === "延期" || isWorkbenchTaskOverdue(task)) return isCurrentWeek;
+      const due = deliveryTaskDueDate(task);
+      return Boolean(due && due >= start && due <= end);
+    })
+    .sort((left, right) => (deliveryTaskDueDate(left)?.getTime() || Infinity) - (deliveryTaskDueDate(right)?.getTime() || Infinity));
+}
+
+function deliveryTaskCard(task) {
+  const project = projectById(task.projectId);
+  const due = deliveryTaskDueDate(task);
+  const overdue = task.status === "延期" || isWorkbenchTaskOverdue(task);
+  const statusLabel = overdue ? "延期" : task.status;
+  return `
+    <article class="prd-list-card prd-clickable" data-workbench-task="${escapeHtml(task.id)}" role="button" tabindex="0">
+      <div>
+        <strong>${escapeHtml(task.module)} · ${escapeHtml(project?.title || project?.name || "未关联项目")}</strong>
+        <small>负责人 ${escapeHtml(task.owner || "待分配")} · 预计交付 ${due ? displayDate(toDateKey(due)) : "-"}${overdue ? " · 已延期" : ""}</small>
+      </div>
+      <span class="prd-tag ${taskStatusClass(statusLabel)}">${statusLabel}</span>
+    </article>
+  `;
+}
+
+function renderDeliveryView() {
+  const root = $("#deliveryList");
+  if (!root) return;
+  const offset = clampDeliveryWeekOffset(state.deliveryWeekOffset);
+  state.deliveryWeekOffset = offset;
+  const { start, end } = deliveryWeekRange(offset);
+  const tasks = deliveryTasksForWeek(offset);
+  const sections = DELIVERY_GROUPS
+    .map((group) => ({ group, items: tasks.filter((task) => DELIVERY_GROUP_MAP[task.module] === group) }))
+    .filter((section) => section.items.length);
+  const rangeLabel = `${displayDate(toDateKey(start))} - ${displayDate(toDateKey(end))}`;
+  const body = sections.length
+    ? sections
+        .map(
+          (section) => `
+            <section class="prd-delivery-group">
+              <h3>${escapeHtml(section.group)} <span>${section.items.length}</span></h3>
+              ${section.items.map((task) => deliveryTaskCard(task)).join("")}
+            </section>
+          `
+        )
+        .join("")
+    : `<p class="empty-copy">${offset === 0 ? "本周没有待交付或已延期的任务。" : "该周没有待交付的任务。"}</p>`;
+  root.innerHTML = `
+    <div class="delivery-week-bar">
+      <button class="ghost-button" type="button" data-delivery-week-prev ${offset <= 0 ? "disabled" : ""}>上一周</button>
+      <div class="delivery-week-label">
+        <strong>${deliveryWeekText(offset)}</strong>
+        <span>${rangeLabel} · ${tasks.length} 个任务</span>
+      </div>
+      <button class="ghost-button" type="button" data-delivery-week-next ${offset >= DELIVERY_MAX_WEEK_OFFSET ? "disabled" : ""}>下一周</button>
+    </div>
+    ${body}
+  `;
+}
+
+function reviewProjectSortValue(project) {
+  return toDate(project.finishDate)?.getTime() || toDate(project.lastUpdated)?.getTime() || 0;
+}
+
+function completedReviewItems() {
+  return prdReviews
+    .map((review) => ({ review, project: projectById(review.projectId) }))
+    .filter(({ project }) => project && project.status === "已完成")
+    .sort((left, right) => reviewProjectSortValue(right.project) - reviewProjectSortValue(left.project));
+}
+
+function reviewMatchesQuery(item, query) {
+  if (!query) return true;
+  const project = item.project;
+  return [project.title, project.name, project.series, item.review.platform, item.review.frontendLink]
+    .some((value) => String(value || "").toLowerCase().includes(query));
+}
+
+function reviewCardImage(review, project) {
+  const image = String(review.image || project?.image || "").trim();
+  const fallbackChar = escapeHtml(String(project?.title || project?.name || "项").trim().slice(0, 1) || "项");
+  if (!image) return `<span class="review-card-image fallback" data-fallback="${fallbackChar}"></span>`;
+  return `<span class="review-card-image" data-fallback="${fallbackChar}"><img src="${escapeHtml(image)}" alt="${escapeHtml(project?.title || "项目图片")}" onerror="this.closest('.review-card-image').classList.add('fallback');this.remove()" /></span>`;
+}
+
+function reviewMetric(value) {
+  return value || value === 0 ? escapeHtml(value) : "-";
+}
+
+function renderReviewGroup(group, items) {
+  const pageKey = group.pageState;
+  const totalPages = Math.max(1, Math.ceil(items.length / REVIEW_PAGE_SIZE));
+  const currentPage = Math.max(1, Math.min(totalPages, Number(state[pageKey]) || 1));
+  state[pageKey] = currentPage;
+  const pageItems = items.slice((currentPage - 1) * REVIEW_PAGE_SIZE, currentPage * REVIEW_PAGE_SIZE);
+  const cards = pageItems.length
+    ? pageItems.map(({ review, project }) => {
+        const highlighted = state.reviewHighlightId === review.id ? " is-highlighted" : "";
+        const cycle = reviewCycleDays(review, project);
+        return `
+          <article class="prd-review-card prd-clickable${highlighted}" data-workbench-review="${escapeHtml(review.id)}" role="button" tabindex="0">
+            <div class="review-card-top">
+              ${reviewCardImage(review, project)}
+              <div>
+                <span class="prd-tag ${review.status === "已提交数据" ? "status-done" : "status-wait"}">${review.status}</span>
+                <h3>${escapeHtml(project?.title || project?.name || "未命名项目")}</h3>
+                <p>${escapeHtml(review.platform || project?.projectType || "-")} · 计划周期（天） ${cycle.planDays} · 实际周期（天） ${cycle.actualDays}</p>
+              </div>
+            </div>
+            <div class="prd-review-metrics">
+              <span>Session ${reviewMetric(review.sessions)}</span>
+              <span>Page Views ${reviewMetric(review.pageViews)}</span>
+              <span>Clicks ${reviewMetric(review.clicks)}</span>
+              <span>Orders ${reviewMetric(review.orders)}</span>
+            </div>
+            <small>填入数据日期：${escapeHtml(review.dataDate || "未填写")}</small>
+          </article>
+        `;
+      }).join("")
+    : `<div class="empty-state">暂无${group.title}的已完成项目复盘。</div>`;
+  return `
+    <section class="review-section">
+      <div class="review-section-head">
+        <div>
+          <p class="eyebrow">${group.key === "submitted" ? "Submitted" : "Pending"}</p>
+          <h4>${group.title}</h4>
+        </div>
+        <span class="status-pill">${items.length} 条</span>
+      </div>
+      <div class="prd-review-grid">${cards}</div>
+      <div class="review-pager">
+        <button class="ghost-button" type="button" data-review-page="${group.key}:prev" ${currentPage <= 1 ? "disabled" : ""}>上一页</button>
+        <span>第 ${currentPage} / ${totalPages} 页</span>
+        <button class="ghost-button" type="button" data-review-page="${group.key}:next" ${currentPage >= totalPages ? "disabled" : ""}>下一页</button>
+      </div>
+    </section>
+  `;
+}
+
 function renderReviewView() {
   const root = $("#reviewList");
   if (!root) return;
-  root.innerHTML = prdReviews
-    .filter((review) => {
-      const project = projectById(review.projectId);
-      return project && project.status !== "已完成";
-    })
-    .map((review) => {
-      const project = projectById(review.projectId);
-      return `
-        <article class="prd-review-card prd-clickable" data-workbench-review="${escapeHtml(review.id)}" role="button" tabindex="0">
-          <span class="prd-tag ${taskStatusClass(review.status)}">${review.status}</span>
-          <h3>${escapeHtml(project?.title || project?.name || "未命名项目")}</h3>
-          <p>${escapeHtml(review.platform)} · 计划 ${review.planDays} 天 · 实际 ${review.actualDays || "待回填"} 天</p>
-          <div class="prd-review-metrics">
-            <span>Sessions ${review.sessions || "-"}</span>
-            <span>Orders ${review.orders || "-"}</span>
-          </div>
-          <small>${escapeHtml(review.conclusion)}</small>
-        </article>
-      `;
-    })
+  const searchInput = $("[data-review-search]");
+  if (searchInput && searchInput.value !== state.reviewSearch) searchInput.value = state.reviewSearch || "";
+  const items = completedReviewItems();
+  root.innerHTML = REVIEW_GROUPS
+    .map((group) => renderReviewGroup(group, items.filter(({ review }) => review.status === group.status)))
     .join("");
 }
 
@@ -2060,28 +2738,39 @@ function renderCompletedDbView() {
   const taskTotal = projects.reduce((sum, project) => sum + prdTasks.filter((task) => task.projectId === project.id).length, 0);
   const count = $("#completedDbCount");
   if (count) count.textContent = `${projects.length} 个项目 / ${taskTotal} 个任务`;
-  root.innerHTML = projects.length
-    ? `
-      <table class="database-table">
-        <thead>
-          <tr>
-            <th>层级</th>
-            <th>项目 / 任务</th>
-            <th>类型 / 模块</th>
-            <th>系列 / 负责人</th>
-            <th>启动 / 预计</th>
-            <th>完成 / 实际</th>
-            <th>节点 / 备注</th>
-            <th>状态</th>
-            <th>更新</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${projects.map((project) => completedProjectRows(project)).join("")}
-        </tbody>
-      </table>
-    `
-    : `<p class="empty-copy">没有匹配的已完成项目。</p>`;
+  if (!projects.length) {
+    root.innerHTML = `<p class="empty-copy">没有匹配的已完成项目。</p>`;
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(projects.length / COMPLETED_DB_PAGE_SIZE));
+  const currentPage = Math.max(1, Math.min(totalPages, Number(state.completedDbPage) || 1));
+  state.completedDbPage = currentPage;
+  const pageProjects = projects.slice((currentPage - 1) * COMPLETED_DB_PAGE_SIZE, currentPage * COMPLETED_DB_PAGE_SIZE);
+  root.innerHTML = `
+    <table class="database-table">
+      <thead>
+        <tr>
+          <th>层级</th>
+          <th>项目 / 任务</th>
+          <th>类型 / 模块</th>
+          <th>系列 / 负责人</th>
+          <th>启动 / 预计</th>
+          <th>完成 / 实际</th>
+          <th>图片 / 备注</th>
+          <th>状态</th>
+          <th>更新</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${pageProjects.map((project) => completedProjectRows(project)).join("")}
+      </tbody>
+    </table>
+    <div class="completed-db-pagination">
+      <button class="ghost-button" type="button" data-completed-db-prev ${currentPage <= 1 ? "disabled" : ""}>上一页</button>
+      <span>第 ${currentPage}/${totalPages} 页 · 每页 ${COMPLETED_DB_PAGE_SIZE} 个项目</span>
+      <button class="ghost-button" type="button" data-completed-db-next ${currentPage >= totalPages ? "disabled" : ""}>下一页</button>
+    </div>
+  `;
 }
 
 function filteredCompletedProjects() {
@@ -2117,7 +2806,7 @@ function completedProjectRows(project) {
       <td>${escapeHtml(project.series || "-")}</td>
       <td>${displayDate(project.startDate) || "-"}</td>
       <td>${displayDate(project.finishDate) || "-"}</td>
-      <td>${escapeHtml(project.currentNode || "-")}</td>
+      <td>${ganttProjectImage(project)}</td>
       <td><span class="prd-tag ${taskStatusClass(project.status)}">${project.status}</span></td>
       <td>${displayDate(project.lastUpdated) || "-"}</td>
     </tr>
@@ -2778,6 +3467,8 @@ async function importFile(file, board) {
 
 function importRows(rows, board) {
   const tasks = rows.map((row) => mapRow(row, board)).filter((task) => task.sku || task.title);
+  const existing = state.imported[board].length;
+  if (existing && !confirm(`导入将覆盖${boardMeta[board].label}现有的 ${existing} 个导入任务，确认继续吗？`)) return;
   state.imported[board] = tasks;
   state.tablePage[board] = 1;
   state.taskSearch[board] = "";
@@ -2789,6 +3480,7 @@ function importRows(rows, board) {
 }
 
 async function importWorkbenchFile(file) {
+  if ((prdProjects.length || prdTasks.length) && !confirm(`导入将覆盖当前工作台的 ${prdProjects.length} 个项目与 ${prdTasks.length} 个任务，确认继续吗？`)) return;
   const ext = file.name.split(".").pop().toLowerCase();
   let rows = [];
   if (["xlsx", "xls"].includes(ext)) {
@@ -2894,6 +3586,8 @@ function downloadTemplate(board) {
 }
 
 function seedDemo() {
+  const hasData = state.imported.photo.length || state.imported.video.length || state.temp.photo.length || state.temp.video.length;
+  if (hasData && !confirm("载入示例将覆盖当前看板的导入任务与临时任务，确认继续吗？")) return;
   state.imported.photo = [
     createImportedTask("photo", { sku: "SKU1001", title: "桌面收纳盒", productType: "家居", sample: "已到样", eta: "2026-06-02", earliestDue: "2026-06-08", assignee: "陈琳", content: "AMAZON出图" }),
     createImportedTask("photo", { sku: "SKU1001-B", title: "桌面收纳盒套装", productType: "家居", sample: "已到样", earliestDue: "2026-07-02", assignee: "陈琳", content: "AMAZON&NPC出图" }),
@@ -2958,6 +3652,51 @@ function memberOptionList(selected = "", includeBlank = true) {
     .join("")}`;
 }
 
+// 任务负责人下拉：显示成员负载，按负载从高到低排序；排版类模块只显示平面组成员。
+function ownerRestrictGroupForModule(module) {
+  return String(module || "").includes("排版") ? "平面" : "";
+}
+
+function ownerLoadBar(rate) {
+  const level = rate >= 100 ? "danger" : rate >= 85 ? "warning" : "success";
+  return `<span class="prd-load-bar"><i class="${level}" style="width:${Math.min(rate, 100)}%"></i><b>${rate}%</b></span>`;
+}
+
+function taskOwnerOption(name, group, rate, selected) {
+  return `
+    <button type="button" class="owner-option${name === selected ? " active" : ""}" data-owner-pick="${escapeHtml(name)}">
+      <span class="owner-option-name">${escapeHtml(name)}</span>
+      <span class="owner-option-group">${escapeHtml(group || "-")}</span>
+      ${ownerLoadBar(rate)}
+    </button>
+  `;
+}
+
+// 负责人选择器：每个成员配负载进度条（与产能负载页一致），按负载从高到低排序；排版类模块只显示平面组。
+function taskOwnerPicker(selected = "", module = "") {
+  const restrictGroup = ownerRestrictGroupForModule(module);
+  const candidates = prdMembers
+    .filter((member) => !restrictGroup || normalizeMemberGroup(member.group, member.skills) === restrictGroup)
+    .map((member) => ({ member, group: normalizeMemberGroup(member.group, member.skills), rate: memberLoad(member).rate }))
+    .sort((left, right) => right.rate - left.rate || left.member.name.localeCompare(right.member.name, "zh-CN"));
+  const names = new Set(candidates.map((item) => item.member.name));
+  const rows = candidates.map(({ member, group, rate }) => taskOwnerOption(member.name, group, rate, selected)).join("");
+  let current = "";
+  if (selected && !names.has(selected)) {
+    const member = prdMembers.find((item) => item.name === selected);
+    const group = member ? `${normalizeMemberGroup(member.group, member.skills)}·非本组` : "非本组";
+    current = taskOwnerOption(selected, group, member ? memberLoad(member).rate : 0, selected);
+  }
+  return `
+    <div class="owner-picker" data-owner-picker>
+      <input type="hidden" name="taskOwner" value="${escapeHtml(selected)}" />
+      <button type="button" class="owner-option${selected ? "" : " active"}" data-owner-pick=""><span class="owner-option-name">待分配</span></button>
+      ${current}
+      ${rows}
+    </div>
+  `;
+}
+
 function taskOptionList(selected = "", projectId = "") {
   const tasks = projectId ? prdTasks.filter((task) => task.projectId === projectId) : prdTasks;
   return `<option value="">不关联具体任务</option>${tasks
@@ -2972,6 +3711,59 @@ function formValue(name) {
 
 function fieldRow(label, control) {
   return `<label class="workbench-field"><span>${label}</span>${control}</label>`;
+}
+
+function projectImageControl(value) {
+  return `
+    <div class="project-image-control">
+      <input name="projectImage" value="${escapeHtml(value)}" placeholder="图片链接 / 粘贴图片 / 本地上传" />
+      <div class="project-image-actions">
+        <button class="ghost-button" type="button" data-paste-project-image>粘贴图片</button>
+        <label class="ghost-button file-action">
+          本地上传
+          <input data-project-image-file type="file" accept="image/*" />
+        </label>
+      </div>
+      <small>支持复制图片后点击粘贴，或从本地选择图片。</small>
+    </div>
+  `;
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function setProjectImageValue(value) {
+  const input = $("[name=\"projectImage\"]", $("#workbenchDialog"));
+  if (!input) return;
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+async function pasteProjectImageFromClipboard() {
+  if (!navigator.clipboard?.read) {
+    showToast("当前浏览器不支持直接读取剪贴板图片，可使用本地上传。");
+    return;
+  }
+  try {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+      const imageType = item.types.find((type) => type.startsWith("image/"));
+      if (!imageType) continue;
+      const blob = await item.getType(imageType);
+      setProjectImageValue(await readFileAsDataUrl(blob));
+      showToast("图片已粘贴到项目。");
+      return;
+    }
+    showToast("剪贴板中没有图片。");
+  } catch (error) {
+    showToast("无法读取剪贴板图片，请改用本地上传。");
+  }
 }
 
 function workbenchSummary(title, items) {
@@ -3041,7 +3833,7 @@ function openProjectManager(projectId = "") {
       </div>
     `,
     actions: `
-      <button class="ghost-button" value="cancel" type="submit">关闭</button>
+      <button class="ghost-button" value="cancel" type="submit">返回</button>
       <button class="ghost-button" type="button" data-workbench-edit-project="${escapeHtml(project.id)}">编辑项目</button>
       <button class="primary-button" type="button" data-open-task-for-project="${escapeHtml(project.id)}">+ 新建子任务</button>
     `
@@ -3071,26 +3863,27 @@ function projectManagerGroup(status) {
   `;
 }
 
-function openProjectDialog(projectId = "") {
+function openProjectDialog(projectId = "", options = {}) {
   const project = prdProjects.find((item) => item.id === projectId);
   const value = project || normalizeWorkbenchProject({});
   const linkedTasks = project ? prdTasks.filter((task) => task.projectId === project.id) : [];
   const linkedDeliverables = project ? prdDeliverables.filter((item) => item.projectId === project.id) : [];
   const linkedReviews = project ? prdReviews.filter((item) => item.projectId === project.id) : [];
+  const returnProjectId = options.returnProjectId || projectId || "";
   openWorkbenchDialog({
     eyebrow: "Project",
     title: project ? "编辑项目" : "新建项目",
     body: `
       <div class="workbench-form-grid">
         ${fieldRow("标题", `<input name="projectTitle" value="${escapeHtml(value.title)}" required />`)}
-        ${fieldRow("产品图片", `<input name="projectImage" value="${escapeHtml(value.image)}" placeholder="图片链接或文件名" />`)}
+        <div class="workbench-field"><span>产品图片</span>${projectImageControl(value.image)}</div>
         ${fieldRow("系列", `<input name="projectSeries" value="${escapeHtml(value.series)}" />`)}
         ${fieldRow("项目类型", `<select name="projectType">${optionList(PROJECT_TYPES, value.projectType)}</select>`)}
         ${fieldRow("项目状态", `<select name="projectStatus">${optionList(PROJECT_STATUSES, value.status)}</select>`)}
         ${fieldRow("当前项目节点", `<input name="projectCurrentNode" value="${escapeHtml(value.currentNode)}" />`)}
         ${fieldRow("项目启动时间", `<input name="projectStartDate" type="date" value="${escapeHtml(value.startDate)}" />`)}
         ${fieldRow("项目完成时间", `<input name="projectFinishDate" type="date" value="${escapeHtml(value.finishDate)}" />`)}
-        ${fieldRow("最后更新时间", `<input name="projectLastUpdated" type="date" value="${escapeHtml(value.lastUpdated)}" />`)}
+        ${fieldRow("最后更新时间", `<div class="readonly-note">${displayFullDate(value.lastUpdated) || "保存后自动记录为今天"} · 保存时自动更新</div>`)}
       </div>
       ${project ? workbenchSummary("关联概览", [
         `${linkedTasks.length} 个任务`,
@@ -3099,11 +3892,16 @@ function openProjectDialog(projectId = "") {
       ]) : ""}
     `,
     actions: `
-      <button class="ghost-button" value="cancel" type="submit">取消</button>
+      <button class="ghost-button" type="button" data-workbench-return-project="${escapeHtml(returnProjectId)}">返回</button>
       ${project ? `<button class="delete-button text-delete" type="button" data-workbench-delete-project="${escapeHtml(project.id)}">删除项目</button>` : ""}
       <button class="primary-button" type="button" data-workbench-save-project="${escapeHtml(project?.id || "")}">保存项目</button>
     `
   });
+}
+
+function touchProjectUpdated(projectId) {
+  const project = projectById(projectId);
+  if (project) project.lastUpdated = todayKey();
 }
 
 function saveProjectDialog(projectId = "") {
@@ -3117,7 +3915,7 @@ function saveProjectDialog(projectId = "") {
     currentNode: formValue("projectCurrentNode"),
     startDate: formValue("projectStartDate"),
     finishDate: formValue("projectFinishDate"),
-    lastUpdated: formValue("projectLastUpdated"),
+    lastUpdated: todayKey(),
     phases: prdProjects.find((project) => project.id === projectId)?.phases || defaultProjectPhases()
   });
   if (!next.title) {
@@ -3161,26 +3959,29 @@ function deleteProject(projectId) {
 
 function openTaskDialog(taskId = "", defaults = {}) {
   const task = prdTasks.find((item) => item.id === taskId);
-  const value = task || normalizeWorkbenchTask({ projectId: defaults.projectId || prdProjects[0]?.id || "", module: defaults.module || "方案制定" });
+  const value = task || normalizeWorkbenchTask({ projectId: defaults.projectId || prdProjects[0]?.id || "", module: defaults.module || "方案制定", status: "待开始" });
   const project = projectById(value.projectId);
+  const statusValue = MANUAL_TASK_STATUSES.includes(value.status) ? value.status : "待开始";
+  const returnProjectId = defaults.returnProjectId || value.projectId || "";
+  const noteText = value.note || value.progress || "由系统根据任务状态与实际完成时间自动生成。";
   openWorkbenchDialog({
     eyebrow: "Task",
     title: task ? "编辑任务" : "新建任务",
     body: `
       <div class="workbench-form-grid">
-        ${fieldRow("所属项目", `<select name="taskProjectId">${projectOptionList(value.projectId)}</select>`)}
+        ${fieldRow("所属项目", `<select name="taskProjectId" disabled>${projectOptionList(value.projectId)}</select><input name="taskProjectId" type="hidden" value="${escapeHtml(value.projectId)}" />`)}
         ${fieldRow("任务标题", `<input name="taskTitle" value="${escapeHtml(value.title)}" required />`)}
         ${fieldRow("任务模块", `<select name="taskModule">${optionList(TASK_MODULES, value.module)}</select>`)}
-        ${fieldRow("负责人", `<select name="taskOwner">${memberOptionList(value.owner)}</select>`)}
+        <div class="workbench-field workbench-field-wide"><span>负责人</span>${taskOwnerPicker(value.owner, value.module)}</div>
         ${fieldRow("预计完成时间", `<input name="taskPlannedDate" type="date" value="${escapeHtml(value.plannedDate)}" />`)}
         ${fieldRow("实际完成时间", `<input name="taskActualDate" type="date" value="${escapeHtml(value.actualDate)}" />`)}
-        ${fieldRow("进度状态", `<select name="taskStatus">${optionList(TASK_STATUSES, value.status)}</select>`)}
-        <label class="workbench-field workbench-field-wide"><span>进度备注</span><textarea name="taskNote">${escapeHtml(value.note || value.progress || "")}</textarea></label>
+        ${fieldRow("进度状态", `<select name="taskStatus">${optionList(MANUAL_TASK_STATUSES, statusValue)}</select>`)}
+        <label class="workbench-field workbench-field-wide"><span>任务备注</span><div class="readonly-note">${escapeHtml(noteText)}</div><input name="taskNote" type="hidden" value="${escapeHtml(value.note || value.progress || "")}" /></label>
       </div>
       ${task ? workbenchSummary("关联信息", [`项目：${project?.title || project?.name || "未关联项目"}`, `当前负责人：${value.owner || "待分配"}`]) : ""}
     `,
     actions: `
-      <button class="ghost-button" value="cancel" type="submit">取消</button>
+      <button class="ghost-button" type="button" data-workbench-return-project="${escapeHtml(returnProjectId)}">返回</button>
       ${task ? `<button class="delete-button text-delete" type="button" data-workbench-delete-task="${escapeHtml(task.id)}">删除任务</button>` : ""}
       <button class="primary-button" type="button" data-workbench-save-task="${escapeHtml(task?.id || "")}">保存任务</button>
     `
@@ -3192,10 +3993,23 @@ function saveTaskDialog(taskId = "") {
   const owner = formValue("taskOwner");
   const plannedDate = formValue("taskPlannedDate");
   const actualDate = formValue("taskActualDate");
-  const note = formValue("taskNote");
+  let note = formValue("taskNote");
   const project = projectById(formValue("taskProjectId"));
-  const suggestedStatus = deriveWorkbenchTaskStatus({ owner, actualDate, progress: note, projectStatus: project?.status });
+  const suggestedStatus = taskId ? deriveWorkbenchTaskStatus({ owner, actualDate, progress: note, projectStatus: project?.status }) : "待开始";
   const selectedStatus = formValue("taskStatus");
+  const finalStatus = MANUAL_TASK_STATUSES.includes(selectedStatus) ? selectedStatus : suggestedStatus;
+  const summaryDraft = {
+    plannedDate,
+    displayPlannedDate: plannedDate,
+    actualDate,
+    note,
+    progress: note,
+    status: finalStatus
+  };
+  if (finalStatus === "已完成" && actualDate) {
+    const summary = completionSummaryText(summaryDraft);
+    if (summary) note = autoLineNote(note, "完成总结", summary);
+  }
   const next = normalizeWorkbenchTask({
     id: taskId || uniqueWorkbenchId("t"),
     projectId: formValue("taskProjectId"),
@@ -3207,7 +4021,7 @@ function saveTaskDialog(taskId = "") {
     actualDate,
     note,
     progress: note,
-    status: selectedStatus === "待开始" && suggestedStatus !== "待开始" ? suggestedStatus : selectedStatus || suggestedStatus
+    status: finalStatus
   });
   if (!next.title) {
     showToast("请填写任务标题。");
@@ -3216,6 +4030,7 @@ function saveTaskDialog(taskId = "") {
   const index = prdTasks.findIndex((task) => task.id === taskId);
   if (index >= 0) prdTasks[index] = next;
   else prdTasks.unshift(next);
+  touchProjectUpdated(next.projectId);
   saveWorkbenchData();
   renderPrdViews();
   closeWorkbenchDialog();
@@ -3234,6 +4049,7 @@ function deleteTask(taskId) {
       prdDeliverables.forEach((item) => {
         if (item.taskId === taskId) item.taskId = "";
       });
+      touchProjectUpdated(task.projectId);
       saveWorkbenchData();
       renderPrdViews();
       showToast("任务已删除。");
@@ -3243,46 +4059,98 @@ function deleteTask(taskId) {
 
 function openMembersDialog(memberId = "") {
   const members = memberId ? prdMembers.filter((member) => member.id === memberId) : prdMembers;
+  const canManageRows = !memberId;
   openWorkbenchDialog({
     eyebrow: "Capacity",
     title: memberId ? "编辑成员档案" : "产能档案设置",
-    body: `<div class="workbench-member-list">${members.map(memberEditorRow).join("")}</div>`,
+    body: `
+      <div class="workbench-member-list" data-member-editor-scope="${canManageRows ? "all" : "single"}">
+        ${members.map((member) => memberEditorRow(member, { canDelete: canManageRows })).join("")}
+      </div>
+    `,
     actions: `
+      ${canManageRows ? `<button class="ghost-button" type="button" data-workbench-add-member>新增人员</button>` : ""}
       <button class="ghost-button" value="cancel" type="submit">取消</button>
       <button class="primary-button" type="button" data-workbench-save-members>保存档案</button>
     `
   });
 }
 
-function memberEditorRow(member) {
+function memberEditorRow(member, options = {}) {
+  const monthKey = workbenchMonthKey();
+  const capacityValue = memberMonthlyCapacity(member, monthKey);
+  const canDelete = options.canDelete !== false;
   return `
     <div class="workbench-member-row" data-member-row="${escapeHtml(member.id)}">
       <strong>${escapeHtml(member.name)}</strong>
       <input name="memberName:${escapeHtml(member.id)}" value="${escapeHtml(member.name)}" aria-label="成员姓名" />
-      <input name="memberGroup:${escapeHtml(member.id)}" value="${escapeHtml(member.group)}" aria-label="组别" />
-      <input name="memberCapacity:${escapeHtml(member.id)}" type="number" min="1" value="${escapeHtml(member.weeklyCapacity)}" aria-label="周产能" />
+      <select name="memberGroup:${escapeHtml(member.id)}" aria-label="组别">${optionList(MEMBER_GROUPS, normalizeMemberGroup(member.group, member.skills))}</select>
+      <input name="memberCapacity:${escapeHtml(member.id)}" type="number" min="1" value="${escapeHtml(capacityValue)}" aria-label="月产能（日）" />
       <input name="memberSkills:${escapeHtml(member.id)}" value="${escapeHtml(member.skills)}" aria-label="擅长标签" />
+      ${canDelete ? `<button class="delete-button" type="button" data-workbench-delete-member-row="${escapeHtml(member.id)}" aria-label="删除成员">×</button>` : ""}
     </div>
   `;
 }
 
+function createMemberDraft() {
+  return normalizeWorkbenchMember({
+    id: uniqueWorkbenchId("m"),
+    name: "新成员",
+    group: "摄影",
+    weeklyCapacity: monthWorkdayCount(workbenchMonthKey()),
+    skills: ""
+  });
+}
+
+function addMemberEditorRow() {
+  const list = $(".workbench-member-list", $("#workbenchDialog"));
+  if (!list) return;
+  list.insertAdjacentHTML("beforeend", memberEditorRow(createMemberDraft()));
+}
+
+function deleteMemberEditorRow(memberId) {
+  const row = $$(".workbench-member-row", $("#workbenchDialog")).find((item) => item.dataset.memberRow === memberId);
+  if (!row) return;
+  row.remove();
+}
+
+function memberFromEditorRow(row) {
+  const id = row.dataset.memberRow;
+  return normalizeWorkbenchMember({
+    id,
+    name: formValue(`memberName:${id}`) || "未命名成员",
+    group: formValue(`memberGroup:${id}`),
+    weeklyCapacity: Math.max(1, Number(formValue(`memberCapacity:${id}`)) || monthWorkdayCount(workbenchMonthKey())),
+    skills: formValue(`memberSkills:${id}`)
+  });
+}
+
 function saveMembersDialog() {
-  $$(".workbench-member-row", $("#workbenchDialog")).forEach((row) => {
+  const list = $(".workbench-member-list", $("#workbenchDialog"));
+  const rows = $$(".workbench-member-row", $("#workbenchDialog"));
+  const scope = list?.dataset.memberEditorScope || "all";
+  const nextMembers = [];
+  rows.forEach((row) => {
     const id = row.dataset.memberRow;
     const member = prdMembers.find((item) => item.id === id);
-    if (!member) return;
-    const oldName = member.name;
-    member.name = formValue(`memberName:${id}`) || member.name;
-    if (oldName !== member.name) {
+    const nextMember = memberFromEditorRow(row);
+    if (member && member.name !== nextMember.name) {
+      const oldName = member.name;
       prdTasks.forEach((task) => {
-        if (task.owner === oldName) task.owner = member.name;
-        if (task.assignee === oldName) task.assignee = member.name;
+        if (task.owner === oldName) task.owner = nextMember.name;
+        if (task.assignee === oldName) task.assignee = nextMember.name;
       });
     }
-    member.group = formValue(`memberGroup:${id}`) || member.group;
-    member.weeklyCapacity = Math.max(1, Number(formValue(`memberCapacity:${id}`)) || member.weeklyCapacity);
-    member.skills = formValue(`memberSkills:${id}`);
+    nextMembers.push(nextMember);
   });
+  if (scope === "all") {
+    prdMembers.splice(0, prdMembers.length, ...nextMembers);
+  } else {
+    nextMembers.forEach((nextMember) => {
+      const index = prdMembers.findIndex((item) => item.id === nextMember.id);
+      if (index >= 0) prdMembers[index] = nextMember;
+    });
+  }
   saveWorkbenchData();
   renderPrdViews();
   closeWorkbenchDialog();
@@ -3333,18 +4201,35 @@ function saveDeliveryDialog(deliveryId) {
 function openReviewDialog(reviewId) {
   const review = prdReviews.find((item) => item.id === reviewId);
   if (!review) return;
+  const project = projectById(review.projectId);
+  const image = review.image || project?.image || "";
+  const cycle = reviewCycleDays(review, project);
   openWorkbenchDialog({
     eyebrow: "Review",
     title: "编辑数据复盘",
     body: `
       <div class="workbench-form-grid">
-        ${fieldRow("所属项目", `<select name="reviewProjectId">${projectOptionList(review.projectId)}</select>`)}
-        ${fieldRow("平台", `<input name="reviewPlatform" value="${escapeHtml(review.platform)}" />`)}
-        ${fieldRow("状态", `<select name="reviewStatus">${optionList(REVIEW_STATUSES, review.status)}</select>`)}
-        ${fieldRow("计划周期", `<input name="reviewPlanDays" type="number" min="0" value="${escapeHtml(review.planDays)}" />`)}
-        ${fieldRow("实际周期", `<input name="reviewActualDays" type="number" min="0" value="${escapeHtml(review.actualDays)}" />`)}
+        ${fieldRow("所属项目", `<select name="reviewProjectId" disabled>${projectOptionList(review.projectId)}</select>`)}
+        ${fieldRow("状态", `<select name="reviewStatus" disabled>${optionList(REVIEW_STATUSES, review.status)}</select>`)}
+        ${fieldRow("计划周期（天）", `<input name="reviewPlanDays" type="number" min="0" value="${escapeHtml(cycle.planDays)}" readonly />`)}
+        ${fieldRow("实际周期（天）", `<input name="reviewActualDays" type="number" min="0" value="${escapeHtml(cycle.actualDays)}" readonly />`)}
+        ${fieldRow("填入数据日期", `<input name="reviewDataDate" type="date" value="${escapeHtml(review.dataDate || todayKey())}" readonly />`)}
+        ${fieldRow("平台/项目类型", `<input name="reviewPlatform" value="${escapeHtml(review.platform || project?.projectType || "")}" readonly />`)}
+        <div class="workbench-field workbench-field-wide">
+          <span>项目产品图片</span>
+          <input name="projectImage" value="${escapeHtml(image)}" readonly />
+        </div>
+        ${fieldRow("前台链接", `<input name="reviewFrontendLink" value="${escapeHtml(review.frontendLink)}" />`)}
+        ${fieldRow("当前排名（大小排名）", `<input name="reviewRanking" value="${escapeHtml(review.ranking)}" />`)}
+        ${fieldRow("当前日销", `<input name="reviewDailySales" value="${escapeHtml(review.dailySales)}" />`)}
+        ${fieldRow("当前价格", `<input name="reviewCurrentPrice" value="${escapeHtml(review.currentPrice)}" />`)}
+        ${fieldRow("近期促销时间段", `<input name="reviewPromoPeriod" value="${escapeHtml(review.promoPeriod)}" />`)}
         ${fieldRow("Sessions", `<input name="reviewSessions" type="number" min="0" value="${escapeHtml(review.sessions)}" />`)}
+        ${fieldRow("Page Views", `<input name="reviewPageViews" type="number" min="0" value="${escapeHtml(review.pageViews)}" />`)}
+        ${fieldRow("Clicks", `<input name="reviewClicks" type="number" min="0" value="${escapeHtml(review.clicks)}" />`)}
         ${fieldRow("Orders", `<input name="reviewOrders" type="number" min="0" value="${escapeHtml(review.orders)}" />`)}
+        ${fieldRow("点击率", `<input name="reviewClickRate" value="${escapeHtml(review.clickRate)}" />`)}
+        ${fieldRow("转化率", `<input name="reviewConversionRate" value="${escapeHtml(review.conversionRate)}" />`)}
         <label class="workbench-field workbench-field-wide"><span>复盘结论</span><textarea name="reviewConclusion">${escapeHtml(review.conclusion)}</textarea></label>
       </div>
     `,
@@ -3358,15 +4243,29 @@ function openReviewDialog(reviewId) {
 function saveReviewDialog(reviewId) {
   const index = prdReviews.findIndex((item) => item.id === reviewId);
   if (index < 0) return;
+  const current = prdReviews[index];
+  const project = projectById(current.projectId);
+  const cycle = reviewCycleDays(current, project);
   prdReviews[index] = normalizeWorkbenchReview({
     id: reviewId,
-    projectId: formValue("reviewProjectId"),
-    platform: formValue("reviewPlatform"),
-    status: formValue("reviewStatus"),
-    planDays: formValue("reviewPlanDays"),
-    actualDays: formValue("reviewActualDays"),
+    projectId: current.projectId,
+    platform: current.platform || project?.projectType || "",
+    status: "已提交数据",
+    planDays: cycle.planDays,
+    actualDays: cycle.actualDays,
+    image: current.image || project?.image || "",
+    dataDate: current.dataDate || todayKey(),
+    frontendLink: formValue("reviewFrontendLink"),
+    ranking: formValue("reviewRanking"),
+    dailySales: formValue("reviewDailySales"),
+    currentPrice: formValue("reviewCurrentPrice"),
+    promoPeriod: formValue("reviewPromoPeriod"),
     sessions: formValue("reviewSessions"),
+    pageViews: formValue("reviewPageViews"),
+    clicks: formValue("reviewClicks"),
     orders: formValue("reviewOrders"),
+    clickRate: formValue("reviewClickRate"),
+    conversionRate: formValue("reviewConversionRate"),
     conclusion: formValue("reviewConclusion")
   });
   saveWorkbenchData();
@@ -3381,8 +4280,13 @@ function downloadTextFile(filename, content, type = "text/plain;charset=utf-8") 
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
+  link.style.display = "none";
+  document.body.appendChild(link);
   link.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    link.remove();
+  }, 0);
 }
 
 function csvCell(value) {
@@ -3390,44 +4294,137 @@ function csvCell(value) {
   return `"${text.replaceAll('"', '""')}"`;
 }
 
+function downloadExcelTable(filename, rows) {
+  const table = rows
+    .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell ?? "")}</td>`).join("")}</tr>`)
+    .join("");
+  const html = `<!doctype html><html><head><meta charset="UTF-8"></head><body><table>${table}</table></body></html>`;
+  downloadTextFile(filename, html, "application/vnd.ms-excel;charset=utf-8");
+}
+
+function downloadStyledReviewExcel(filename, rows) {
+  const widths = [260, 82, 110, 110, 112, 170, 72, 158, 68, 150, 142, 64, 86, 56, 56, 56, 56, 340];
+  const emptyRows = Array.from({ length: 6 }, () => Array.from({ length: widths.length }, () => ""));
+  const bodyRows = rows.slice(1).concat(emptyRows);
+  const colgroup = widths.map((width) => `<col style="width:${width}px" />`).join("");
+  const header = rows[0].map((cell) => `<th>${escapeHtml(cell)}</th>`).join("");
+  const body = bodyRows
+    .map((row) => `
+      <tr>
+        ${widths.map((_, index) => `<td class="${index === widths.length - 1 ? "conclusion-cell" : ""}">${escapeHtml(row[index] ?? "")}</td>`).join("")}
+      </tr>
+    `)
+    .join("");
+  const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    table { border-collapse: collapse; table-layout: fixed; font-family: "Microsoft YaHei", Arial, sans-serif; font-size: 12px; }
+    th, td { border: 1px solid #222; height: 18px; padding: 0 6px; color: #1f2933; text-align: center; vertical-align: middle; white-space: nowrap; mso-number-format: "\\@"; }
+    th { background: #e2f0d9; color: #000; font-weight: 700; }
+    .conclusion-cell { text-align: right; }
+  </style>
+</head>
+<body>
+  <table>
+    <colgroup>${colgroup}</colgroup>
+    <thead><tr>${header}</tr></thead>
+    <tbody>${body}</tbody>
+  </table>
+</body>
+</html>`;
+  downloadTextFile(filename, html, "application/vnd.ms-excel;charset=utf-8");
+}
+
+function exportRowsAsExcel(rows, sheetName, baseName) {
+  if (window.XLSX) {
+    try {
+      const sheet = window.XLSX.utils.aoa_to_sheet(rows);
+      const workbook = window.XLSX.utils.book_new();
+      window.XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
+      window.XLSX.writeFile(workbook, `${baseName}.xlsx`);
+      return "xlsx";
+    } catch (error) {
+      console.warn("XLSX export failed, falling back to HTML Excel.", error);
+    }
+  }
+  downloadExcelTable(`${baseName}.xls`, rows);
+  return "xls";
+}
+
 function exportDeliveryList() {
-  const rows = [["项目", "任务模块", "任务", "素材名称", "规格", "状态", "链接"]];
-  prdDeliverables
-    .filter((item) => {
-      const project = projectById(item.projectId);
-      return project && project.status !== "已完成";
-    })
-    .forEach((item) => {
-    const project = projectById(item.projectId);
-    const task = prdTasks.find((task) => task.id === item.taskId);
+  const offset = clampDeliveryWeekOffset(state.deliveryWeekOffset);
+  const rows = [["小组", "项目", "任务模块", "负责人", "预计交付", "状态"]];
+  deliveryTasksForWeek(offset).forEach((task) => {
+    const project = projectById(task.projectId);
+    const due = deliveryTaskDueDate(task);
+    const overdue = task.status === "延期" || isWorkbenchTaskOverdue(task);
     rows.push([
+      DELIVERY_GROUP_MAP[task.module] || "",
       project?.title || project?.name || "",
-      task?.module || "",
-      task?.title || "",
-      item.name,
-      item.spec,
-      item.status,
-      item.link
+      task.module,
+      task.owner || "待分配",
+      due ? toDateKey(due) : "",
+      overdue ? "延期" : task.status
     ]);
   });
   const csv = `\uFEFF${rows.map((row) => row.map(csvCell).join(",")).join("\n")}`;
-  downloadTextFile(`重点项目交付清单-${todayKey()}.csv`, csv, "text/csv;charset=utf-8");
+  downloadTextFile(`重点项目交付清单-${deliveryWeekText(offset)}-${todayKey()}.csv`, csv, "text/csv;charset=utf-8");
   showToast("交付清单已导出。");
 }
 
 function exportReviewReport() {
-  const body = prdReviews
-    .filter((review) => {
-      const project = projectById(review.projectId);
-      return project && project.status !== "已完成";
-    })
-    .map((review) => {
-      const project = projectById(review.projectId);
-      return `## ${project?.title || project?.name || "未命名项目"}\n\n- 项目类型：${review.platform || project?.projectType || "-"}\n- 状态：${review.status}\n- 计划周期：${review.planDays} 天\n- 实际周期：${review.actualDays || "待回填"} 天\n- Sessions：${review.sessions || "-"}\n- Orders：${review.orders || "-"}\n- 结论：${review.conclusion || "-"}\n`;
-    })
-    .join("\n");
-  downloadTextFile(`重点项目复盘报告-${todayKey()}.md`, `# 重点项目复盘报告\n\n${body}`);
-  showToast("复盘报告已导出。");
+  try {
+    const rows = [[
+      "所属项目",
+      "状态",
+      "计划周期（天）",
+      "实际周期（天）",
+      "填入数据日期",
+      "平台/项目类型",
+      "前台链接",
+      "当前排名（大小排名）",
+      "当前日销",
+      "当前价格",
+      "近期促销时间段",
+      "Session",
+      "Page Views",
+      "Clicks",
+      "Orders",
+      "点击率",
+      "转化率",
+      "复盘结论"
+    ]];
+    completedReviewItems().forEach(({ review, project }) => {
+      const cycle = reviewCycleDays(review, project);
+      rows.push([
+        project?.title || project?.name || "",
+        review.status,
+        cycle.planDays,
+        cycle.actualDays,
+        review.dataDate || "",
+        review.platform || project?.projectType || "",
+        review.frontendLink || "",
+        review.ranking || "",
+        review.dailySales || "",
+        review.currentPrice || "",
+        review.promoPeriod || "",
+        review.sessions || "",
+        review.pageViews || "",
+        review.clicks || "",
+        review.orders || "",
+        review.clickRate || "",
+        review.conversionRate || "",
+        review.conclusion || ""
+      ]);
+    });
+    downloadStyledReviewExcel(`重点项目复盘报告-${todayKey()}.xls`, rows);
+    showToast("复盘报告已导出。");
+  } catch (error) {
+    console.error(error);
+    showToast("复盘报告导出失败，请检查浏览器下载权限。");
+  }
 }
 
 function completedDatabaseRows() {
@@ -3464,6 +4461,28 @@ function locateSearchResult(board) {
   if (task?.start) state.monthCursor[board] = toMonthKey(toDate(task.start));
   const importedIndex = filteredImported(board).findIndex((item) => item.id === task?.id);
   state.tablePage[board] = importedIndex >= 0 ? Math.floor(importedIndex / PAGE_SIZE) + 1 : 1;
+}
+
+function locateReviewSearchResult() {
+  const query = String(state.reviewSearch || "").trim().toLowerCase();
+  if (!query) {
+    state.reviewHighlightId = "";
+    state.reviewSubmittedPage = 1;
+    state.reviewPendingPage = 1;
+    return;
+  }
+  const allItems = completedReviewItems();
+  const target = allItems.find((item) => reviewMatchesQuery(item, query));
+  state.reviewHighlightId = target?.review.id || "";
+  if (!target) {
+    showToast("没有找到匹配的已完成项目。");
+    return;
+  }
+  REVIEW_GROUPS.forEach((group) => {
+    const groupItems = allItems.filter(({ review }) => review.status === group.status);
+    const index = groupItems.findIndex(({ review }) => review.id === target.review.id);
+    if (index >= 0) state[group.pageState] = Math.floor(index / REVIEW_PAGE_SIZE) + 1;
+  });
 }
 
 function bindEvents() {
@@ -3509,6 +4528,7 @@ function bindEvents() {
   if (completedSearch) {
     completedSearch.addEventListener("input", (event) => {
       state.completedDbSearch = event.target.value;
+      state.completedDbPage = 1;
       renderCompletedDbView();
     });
   }
@@ -3517,7 +4537,36 @@ function bindEvents() {
   if (completedType) {
     completedType.addEventListener("change", (event) => {
       state.completedDbType = event.target.value;
+      state.completedDbPage = 1;
       renderCompletedDbView();
+    });
+  }
+
+  const reviewSearch = $("[data-review-search]");
+  if (reviewSearch) {
+    reviewSearch.addEventListener("input", (event) => {
+      state.reviewSearch = event.target.value;
+      if (!state.reviewSearch.trim()) {
+        state.reviewHighlightId = "";
+        state.reviewSubmittedPage = 1;
+        state.reviewPendingPage = 1;
+        renderReviewView();
+      }
+    });
+    reviewSearch.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      locateReviewSearchResult();
+      renderReviewView();
+    });
+  }
+
+  const taskPoolOwner = $("[data-taskpool-owner]");
+  if (taskPoolOwner) {
+    taskPoolOwner.addEventListener("change", (event) => {
+      state.taskPoolOwner = event.target.value;
+      renderTaskPoolView();
+      saveState();
     });
   }
 
@@ -3625,6 +4674,29 @@ function bindEvents() {
     const completeTemp = event.target.dataset.completeTemp;
     const capacityLimit = event.target.dataset.capacityLimit;
     const tempField = event.target.dataset.tempField;
+
+    if (event.target.name === "taskModule") {
+      const dialog = $("#workbenchDialog");
+      const picker = dialog && $("[data-owner-picker]", dialog);
+      if (picker) {
+        const current = $('input[name="taskOwner"]', picker)?.value || "";
+        picker.outerHTML = taskOwnerPicker(current, event.target.value);
+      }
+    }
+    const projectImageFile = event.target.dataset.projectImageFile !== undefined;
+    if (projectImageFile) {
+      const file = event.target.files?.[0];
+      if (file) {
+        readFileAsDataUrl(file)
+          .then((value) => {
+            setProjectImageValue(value);
+            showToast("图片已上传到项目。");
+          })
+          .catch(() => showToast("图片读取失败，请重新选择。"));
+      }
+      event.target.value = "";
+      return;
+    }
     if (completeTemp && event.target.checked) {
       const [board, taskId] = completeTemp.split(":");
       archiveTempTask(board, taskId);
@@ -3646,7 +4718,37 @@ function bindEvents() {
     }
   });
 
+  document.addEventListener("paste", (event) => {
+    const dialog = $("#workbenchDialog");
+    if (!dialog?.open || !$("[name=\"projectImage\"]", dialog)) return;
+    const file = Array.from(event.clipboardData?.files || []).find((item) => item.type.startsWith("image/"));
+    if (!file) return;
+    event.preventDefault();
+    readFileAsDataUrl(file)
+      .then((value) => {
+        setProjectImageValue(value);
+        showToast("图片已粘贴到项目。");
+      })
+      .catch(() => showToast("图片读取失败，请重新复制。"));
+  });
+
   document.addEventListener("click", (event) => {
+    const taskQuick = event.target.closest("[data-task-quick]");
+    if (taskQuick) {
+      const [action, taskId] = taskQuick.dataset.taskQuick.split(":");
+      quickUpdateWorkbenchTask(taskId, action);
+      return;
+    }
+    const ownerPick = event.target.closest("[data-owner-pick]");
+    if (ownerPick) {
+      const picker = ownerPick.closest("[data-owner-picker]");
+      if (picker) {
+        const input = $('input[name="taskOwner"]', picker);
+        if (input) input.value = ownerPick.dataset.ownerPick;
+        $$(".owner-option", picker).forEach((option) => option.classList.toggle("active", option === ownerPick));
+      }
+      return;
+    }
     const openWorkbenchProject = event.target.closest("[data-open-workbench-project]");
     const openWorkbenchTask = event.target.closest("[data-open-workbench-task]");
     const openWorkbenchMembers = event.target.closest("[data-open-workbench-members]");
@@ -3654,6 +4756,8 @@ function bindEvents() {
     const exportWorkbenchDelivery = event.target.closest("[data-export-workbench-delivery]");
     const exportWorkbenchReview = event.target.closest("[data-export-workbench-review]");
     const exportWorkbenchCompleted = event.target.closest("[data-export-workbench-completed]");
+    const reviewLocate = event.target.closest("[data-review-locate]");
+    const reviewPage = event.target.closest("[data-review-page]");
     const workbenchProject = event.target.closest("[data-workbench-project]");
     const workbenchTask = event.target.closest("[data-workbench-task]");
     const workbenchProjectManage = event.target.closest("[data-workbench-project-manage]");
@@ -3665,14 +4769,22 @@ function bindEvents() {
     const saveTask = event.target.dataset.workbenchSaveTask;
     const deleteWorkbenchTask = event.target.dataset.workbenchDeleteTask;
     const saveMembers = event.target.dataset.workbenchSaveMembers;
+    const addMember = event.target.closest("[data-workbench-add-member]");
+    const deleteMemberRow = event.target.dataset.workbenchDeleteMemberRow;
     const saveDelivery = event.target.dataset.workbenchSaveDelivery;
     const saveReview = event.target.dataset.workbenchSaveReview;
     const editWorkbenchProject = event.target.dataset.workbenchEditProject;
     const openTaskForProject = event.target.dataset.openTaskForProject;
+    const returnProject = event.target.dataset.workbenchReturnProject;
+    const pasteProjectImage = event.target.closest("[data-paste-project-image]");
     const confirmAction = event.target.dataset.confirmAction;
     const workbenchMonthPrev = event.target.closest("[data-workbench-month-prev]");
     const workbenchMonthNext = event.target.closest("[data-workbench-month-next]");
     const workbenchMonthToday = event.target.closest("[data-workbench-month-today]");
+    const deliveryWeekPrev = event.target.closest("[data-delivery-week-prev]");
+    const deliveryWeekNext = event.target.closest("[data-delivery-week-next]");
+    const completedDbPrev = event.target.closest("[data-completed-db-prev]");
+    const completedDbNext = event.target.closest("[data-completed-db-next]");
     const addRule = event.target.dataset.addRule;
     const deleteRule = event.target.dataset.deleteRule;
     const deleteImport = event.target.dataset.deleteImport;
@@ -3711,6 +4823,21 @@ function bindEvents() {
       exportReviewReport();
       return;
     }
+    if (reviewLocate) {
+      locateReviewSearchResult();
+      renderReviewView();
+      return;
+    }
+    if (reviewPage) {
+      const [groupKey, direction] = reviewPage.dataset.reviewPage.split(":");
+      const group = REVIEW_GROUPS.find((item) => item.key === groupKey);
+      if (group) {
+        const delta = direction === "next" ? 1 : -1;
+        state[group.pageState] = Math.max(1, (Number(state[group.pageState]) || 1) + delta);
+        renderReviewView();
+      }
+      return;
+    }
     if (exportWorkbenchCompleted) {
       exportCompletedDatabase();
       return;
@@ -3735,6 +4862,14 @@ function bindEvents() {
       saveMembersDialog();
       return;
     }
+    if (addMember) {
+      addMemberEditorRow();
+      return;
+    }
+    if (deleteMemberRow) {
+      deleteMemberEditorRow(deleteMemberRow);
+      return;
+    }
     if (saveDelivery) {
       saveDeliveryDialog(saveDelivery);
       return;
@@ -3750,29 +4885,62 @@ function bindEvents() {
       if (action) action();
       return;
     }
+    if (returnProject !== undefined) {
+      if (returnProject) openProjectManager(returnProject);
+      else closeWorkbenchDialog();
+      return;
+    }
+    if (pasteProjectImage) {
+      pasteProjectImageFromClipboard();
+      return;
+    }
     if (editWorkbenchProject) {
-      openProjectDialog(editWorkbenchProject);
+      openProjectDialog(editWorkbenchProject, { returnProjectId: editWorkbenchProject });
       return;
     }
     if (openTaskForProject) {
-      openTaskDialog("", { projectId: openTaskForProject });
+      openTaskDialog("", { projectId: openTaskForProject, returnProjectId: openTaskForProject });
       return;
     }
     if (workbenchMonthPrev) {
       state.workbenchMonthCursor = addMonths(workbenchMonthKey(), -1);
-      renderProjectCenterView();
+      renderPrdViews({ skipGanttTodayScroll: true });
       saveState();
       return;
     }
     if (workbenchMonthNext) {
       state.workbenchMonthCursor = addMonths(workbenchMonthKey(), 1);
-      renderProjectCenterView();
+      renderPrdViews({ skipGanttTodayScroll: true });
       saveState();
       return;
     }
     if (workbenchMonthToday) {
       state.workbenchMonthCursor = toMonthKey(new Date());
-      renderProjectCenterView();
+      renderPrdViews({ skipGanttTodayScroll: true });
+      saveState();
+      return;
+    }
+    if (deliveryWeekPrev) {
+      state.deliveryWeekOffset = clampDeliveryWeekOffset(state.deliveryWeekOffset - 1);
+      renderDeliveryView();
+      saveState();
+      return;
+    }
+    if (deliveryWeekNext) {
+      state.deliveryWeekOffset = clampDeliveryWeekOffset(state.deliveryWeekOffset + 1);
+      renderDeliveryView();
+      saveState();
+      return;
+    }
+    if (completedDbPrev) {
+      state.completedDbPage = Math.max(1, (Number(state.completedDbPage) || 1) - 1);
+      renderCompletedDbView();
+      saveState();
+      return;
+    }
+    if (completedDbNext) {
+      state.completedDbPage = (Number(state.completedDbPage) || 1) + 1;
+      renderCompletedDbView();
       saveState();
       return;
     }
@@ -3786,11 +4954,12 @@ function bindEvents() {
       return;
     }
     if (workbenchTask && (!event.target.closest("button, input, select, textarea, a") || event.target.closest(".gantt-task-bar, .project-task-item"))) {
-      openTaskDialog(workbenchTask.dataset.workbenchTask);
+      const task = prdTasks.find((item) => item.id === workbenchTask.dataset.workbenchTask);
+      openTaskDialog(workbenchTask.dataset.workbenchTask, { returnProjectId: task?.projectId || "" });
       return;
     }
     if (workbenchMember && !event.target.closest("button, input, select, textarea, a")) {
-      openMembersDialog(workbenchMember.dataset.workbenchMember);
+      openMemberProjectsDialog(workbenchMember.dataset.workbenchMember);
       return;
     }
     if (workbenchDelivery && !event.target.closest("button, input, select, textarea, a")) {
@@ -3814,17 +4983,22 @@ function bindEvents() {
     if (deleteRule) {
       const [board, index] = deleteRule.split(":");
       if (state.rules[board].length <= 1) return;
+      if (!confirm(`确认删除规则「${state.rules[board][Number(index)]?.content || ""}」吗？`)) return;
       state.rules[board].splice(Number(index), 1);
       render();
     }
     if (deleteImport) {
       const [board, taskId] = deleteImport.split(":");
-      state.imported[board] = state.imported[board].filter((task) => task.id !== taskId);
+      const target = state.imported[board].find((item) => item.id === taskId);
+      if (!confirm(`确认删除导入任务「${target?.sku || target?.title || taskId}」吗？删除后不可恢复。`)) return;
+      state.imported[board] = state.imported[board].filter((item) => item.id !== taskId);
       render();
     }
     if (deleteTemp) {
       const [board, taskId] = deleteTemp.split(":");
-      state.temp[board] = state.temp[board].filter((task) => task.id !== taskId);
+      const target = state.temp[board].find((item) => item.id === taskId);
+      if (!confirm(`确认删除临时任务「${target?.sku || target?.note || taskId}」吗？删除后不可恢复。`)) return;
+      state.temp[board] = state.temp[board].filter((item) => item.id !== taskId);
       render();
     }
     if (monthPrev) {
@@ -3927,6 +5101,7 @@ function bindEvents() {
     const ganttSource = event.target.closest("[data-workbench-gantt-task]");
     if (ganttSource) {
       ganttDragSource = ganttSource;
+      ganttMoveDragTaskId = ganttSource.dataset.workbenchGanttTask || "";
       ganttDragSource.classList.add("gantt-dragging");
       event.dataTransfer.setData("text/plain", `workbench:${ganttSource.dataset.workbenchGanttTask}`);
       event.dataTransfer.effectAllowed = "move";
@@ -3939,13 +5114,14 @@ function bindEvents() {
     event.dataTransfer.effectAllowed = "move";
   });
   document.addEventListener("dragover", (event) => {
-    const ganttTarget = event.target.closest("[data-workbench-gantt-date]");
+    const ganttTarget = ganttDateTargetFromEvent(event);
     if (ganttTarget) {
       event.preventDefault();
-      ganttTarget.classList.add("drop-target");
+      $$(".gantt-drop-cell.drop-target").forEach((item) => item.classList.remove("drop-target"));
+      ganttTarget.cell.classList.add("drop-target");
       const [scope, taskId] = event.dataTransfer.getData("text/plain").split(":");
       const resizeTaskId = scope === "workbench-resize" ? taskId : ganttResizeDrag?.taskId;
-      if (resizeTaskId) updateGanttResizePreview(resizeTaskId, ganttTarget.dataset.workbenchGanttDate);
+      if (resizeTaskId) updateGanttResizePreview(resizeTaskId, ganttTarget.dateKey);
       return;
     }
     const target = event.target.closest("[data-drop-date]");
@@ -3980,17 +5156,19 @@ function bindEvents() {
   document.addEventListener("drop", (event) => {
     clearTimeout(personalEdgeSwitchTimer);
     personalEdgeSwitchTimer = 0;
-    const ganttTarget = event.target.closest("[data-workbench-gantt-date]");
+    const ganttTarget = ganttDateTargetFromEvent(event);
     if (ganttTarget) {
       event.preventDefault();
-      ganttTarget.classList.remove("drop-target");
+      ganttTarget.cell.classList.remove("drop-target");
       const [scope, taskId, edge] = event.dataTransfer.getData("text/plain").split(":");
       const resizeTaskId = scope === "workbench-resize" ? taskId : ganttResizeDrag?.taskId;
       const resizeEdge = scope === "workbench-resize" ? edge : ganttResizeDrag?.edge;
+      const moveTaskId = scope === "workbench" ? taskId : ganttMoveDragTaskId;
       clearGanttResizePreview();
-      if (resizeTaskId) resizeWorkbenchTaskActualDate(resizeTaskId, resizeEdge, ganttTarget.dataset.workbenchGanttDate);
-      else if (scope === "workbench") moveWorkbenchTaskToDate(taskId, ganttTarget.dataset.workbenchGanttDate);
+      if (resizeTaskId) resizeWorkbenchTaskActualDate(resizeTaskId, resizeEdge, ganttTarget.dateKey);
+      else if (moveTaskId) moveWorkbenchTaskToDate(moveTaskId, ganttTarget.dateKey);
       ganttResizeDrag = null;
+      ganttMoveDragTaskId = "";
       return;
     }
     const target = event.target.closest("[data-drop-date]");
@@ -4019,6 +5197,7 @@ function bindEvents() {
     ganttDragSource?.classList.remove("gantt-dragging");
     ganttDragSource = null;
     ganttResizeDrag = null;
+    ganttMoveDragTaskId = "";
     clearTimeout(personalEdgeSwitchTimer);
     personalEdgeSwitchTimer = 0;
     personalEdgeSwitchedThisDrag = false;

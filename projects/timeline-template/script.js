@@ -734,6 +734,183 @@ function showExportPreview(dataUrl, fileName) {
   showToast("图片已生成，可下载或打开查看");
 }
 
+function bridge() {
+  return window.TimelineWorkbenchBridge;
+}
+
+function optionHtml(values, selected = "", includeBlank = false) {
+  return `${includeBlank ? `<option value="">请选择</option>` : ""}${values.map((value) => `<option value="${escapeAttr(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(value)}</option>`).join("")}`;
+}
+
+function buildWorkbenchDraft() {
+  readForm();
+  if (!bridge()) return null;
+  const draft = bridge().buildDraft({
+    state: clone(state),
+    items: buildItems(),
+    getTypeLabel
+  });
+  const firstTask = draft.tasks.find((task) => task.shouldImport && task.module);
+  if (!draft.project.currentNode && firstTask) draft.project.currentNode = firstTask.module;
+  return draft;
+}
+
+function validateWorkbenchDraft(draft) {
+  const issues = [];
+  if (!draft.project.title.trim()) issues.push("请填写项目标题");
+  if (!draft.project.startDate) issues.push("请填写项目启动时间");
+  if (!draft.project.finishDate) issues.push("请填写项目完成时间");
+  const selectedTasks = draft.tasks.filter((task) => task.shouldImport);
+  if (!selectedTasks.length) issues.push("请至少选择一个任务录入");
+  selectedTasks.forEach((task) => {
+    if (!task.module || !bridge().TASK_MODULES.includes(task.module)) issues.push(`${task.sourceNode} 需要选择工作台模块`);
+    if (!task.plannedDate) issues.push(`${task.sourceNode} 需要填写预计完成时间`);
+  });
+  return issues;
+}
+
+function draftFromWorkbenchDialog(overlay) {
+  const project = {};
+  overlay.querySelectorAll("[data-import-project]").forEach((input) => {
+    project[input.dataset.importProject] = input.value;
+  });
+  const tasks = [];
+  overlay.querySelectorAll("[data-import-task-row]").forEach((row) => {
+    const index = Number(row.dataset.importTaskRow);
+    const base = workbenchImportDraft.tasks[index];
+    const task = { ...base };
+    row.querySelectorAll("[data-import-task]").forEach((input) => {
+      const field = input.dataset.importTask;
+      task[field] = input.type === "checkbox" ? input.checked : input.value;
+    });
+    task.needsReview = Boolean(task.shouldImport && !task.module);
+    tasks[index] = task;
+  });
+  workbenchImportDraft = { project, tasks };
+  return workbenchImportDraft;
+}
+
+function updateWorkbenchImportMessage(overlay) {
+  const draft = draftFromWorkbenchDialog(overlay);
+  const issues = validateWorkbenchDraft(draft);
+  const message = overlay.querySelector("[data-import-message]");
+  const confirmButton = overlay.querySelector("[data-confirm-workbench-import]");
+  message.textContent = issues.length ? `还需校对：${issues[0]}${issues.length > 1 ? `等 ${issues.length} 项` : ""}` : "校对完成，可以录入工作台。";
+  message.classList.toggle("warning", Boolean(issues.length));
+  confirmButton.disabled = Boolean(issues.length);
+  overlay.querySelectorAll("[data-import-task-row]").forEach((row) => {
+    const task = draft.tasks[Number(row.dataset.importTaskRow)];
+    row.classList.toggle("needs-review", Boolean(task.shouldImport && !task.module));
+    row.classList.toggle("excluded", !task.shouldImport);
+    const badge = row.querySelector("[data-import-task-badge]");
+    badge.innerHTML = task.shouldImport && !task.module ? `<span class="workbench-review-badge">需校对</span>` : `<span class="workbench-ok-badge">${task.shouldImport ? "可录入" : "不录入"}</span>`;
+  });
+}
+
+function workbenchTaskRows(draft) {
+  return draft.tasks.map((task, index) => {
+    const badge = task.shouldImport && !task.module
+      ? `<span class="workbench-review-badge">需校对</span>`
+      : `<span class="workbench-ok-badge">${task.shouldImport ? "可录入" : "不录入"}</span>`;
+    return `
+      <tr data-import-task-row="${index}" class="${task.shouldImport && !task.module ? "needs-review" : ""} ${task.shouldImport ? "" : "excluded"}">
+        <td><input data-import-task="shouldImport" type="checkbox" ${task.shouldImport ? "checked" : ""} aria-label="是否录入 ${escapeAttr(task.sourceNode)}" /></td>
+        <td>${escapeHtml(task.sourceTypeLabel)}</td>
+        <td>${escapeHtml(task.sourceNode)}${task.excludedReason ? `<br><small>${escapeHtml(task.excludedReason)}</small>` : ""}</td>
+        <td>${escapeHtml(task.startDate)} - ${escapeHtml(task.plannedDate)}</td>
+        <td><select data-import-task="module">${optionHtml(bridge().TASK_MODULES, task.module, true)}</select></td>
+        <td><input data-import-task="owner" value="${escapeAttr(task.owner)}" placeholder="负责人" /></td>
+        <td><input data-import-task="plannedDate" type="date" value="${escapeAttr(task.plannedDate)}" /></td>
+        <td><select data-import-task="priority">${optionHtml(["高", "中", "低"], task.priority || "中")}</select></td>
+        <td><input class="workbench-note-input" data-import-task="note" value="${escapeAttr(task.note)}" /></td>
+        <td data-import-task-badge>${badge}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
+let workbenchImportDraft = null;
+
+function showWorkbenchImportPreview() {
+  if (!bridge()) {
+    showToast("工作台映射模块未加载，请刷新页面后重试。");
+    return;
+  }
+  workbenchImportDraft = buildWorkbenchDraft();
+  if (!workbenchImportDraft.tasks.length) {
+    showToast("当前排期没有可录入的任务。");
+    return;
+  }
+  document.querySelector(".export-overlay")?.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "export-overlay";
+  overlay.innerHTML = `
+    <div class="export-dialog workbench-import-dialog">
+      <div class="export-dialog-header">
+        <div><p class="eyebrow">Workbench Import</p><h2>录入工作台预览</h2></div>
+        <button class="delete-button" data-close-workbench-import type="button">×</button>
+      </div>
+      <div class="workbench-import-body">
+        <section class="workbench-import-section">
+          <h3>项目字段</h3>
+          <div class="workbench-project-grid">
+            <label>标题<input data-import-project="title" value="${escapeAttr(workbenchImportDraft.project.title)}" /></label>
+            <label>系列<input data-import-project="series" value="${escapeAttr(workbenchImportDraft.project.series)}" placeholder="可选" /></label>
+            <label>项目类型<select data-import-project="projectType">${optionHtml(bridge().PROJECT_TYPES, workbenchImportDraft.project.projectType)}</select></label>
+            <label>项目状态<select data-import-project="status">${optionHtml(bridge().PROJECT_STATUSES, workbenchImportDraft.project.status)}</select></label>
+            <label>当前节点<input data-import-project="currentNode" value="${escapeAttr(workbenchImportDraft.project.currentNode)}" /></label>
+            <label>启动时间<input data-import-project="startDate" type="date" value="${escapeAttr(workbenchImportDraft.project.startDate)}" /></label>
+            <label>完成时间<input data-import-project="finishDate" type="date" value="${escapeAttr(workbenchImportDraft.project.finishDate)}" /></label>
+            <label>产品图片<input data-import-project="image" value="${escapeAttr(workbenchImportDraft.project.image)}" placeholder="可选" /></label>
+          </div>
+        </section>
+        <section class="workbench-import-section">
+          <h3>任务字段</h3>
+          <div class="workbench-task-preview">
+            <table>
+              <thead>
+                <tr>
+                  <th>录入</th><th>来源大类</th><th>来源节点</th><th>排期</th><th>工作台模块</th><th>负责人</th><th>预计完成</th><th>优先级</th><th>备注</th><th>状态</th>
+                </tr>
+              </thead>
+              <tbody>${workbenchTaskRows(workbenchImportDraft)}</tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+      <div class="export-actions">
+        <span class="workbench-import-message" data-import-message></span>
+        <a class="ghost-button" href="../capacity-board/index.html?module=workbench" target="_blank" rel="noopener">打开工作台</a>
+        <button class="ghost-button" data-close-workbench-import type="button">取消</button>
+        <button class="primary-button" data-confirm-workbench-import type="button">确认录入</button>
+      </div>
+    </div>`;
+
+  overlay.querySelectorAll("[data-close-workbench-import]").forEach((button) => button.addEventListener("click", () => overlay.remove()));
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) overlay.remove();
+  });
+  overlay.addEventListener("input", () => updateWorkbenchImportMessage(overlay));
+  overlay.addEventListener("change", () => updateWorkbenchImportMessage(overlay));
+  overlay.querySelector("[data-confirm-workbench-import]").addEventListener("click", () => {
+    const draft = draftFromWorkbenchDialog(overlay);
+    const issues = validateWorkbenchDraft(draft);
+    if (issues.length) {
+      updateWorkbenchImportMessage(overlay);
+      return;
+    }
+    try {
+      const result = bridge().applyDraftToWorkbench(draft);
+      overlay.remove();
+      showToast(`${result.projectCreated ? "已创建" : "已更新"}项目，新增 ${result.createdTasks} 个任务，更新 ${result.updatedTasks} 个任务。`);
+    } catch (error) {
+      showToast(error.message || "录入失败，请检查预览字段。");
+    }
+  });
+  document.body.appendChild(overlay);
+  updateWorkbenchImportMessage(overlay);
+}
+
 function showToast(message) {
   toast.textContent = message;
   toast.hidden = false;
@@ -770,6 +947,7 @@ document.querySelector("#backBtn").addEventListener("click", closeTemplate);
 document.querySelector("#jumpPreviewBtn").addEventListener("click", () => {
   document.querySelector("#previewPanel").scrollIntoView({ behavior: "smooth", block: "start" });
 });
+document.querySelector("#importWorkbenchBtn").addEventListener("click", showWorkbenchImportPreview);
 document.querySelector("#resetBtn").addEventListener("click", () => {
   if (!confirm("确认恢复示例吗？当前自定义内容会被清空。")) return;
   localStorage.removeItem(storageKey);

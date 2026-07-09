@@ -96,15 +96,17 @@
         <section class="board-view" id="projectsView">
           <section class="panel gantt-panel">
             <div class="panel-heading">
-              <div>
+              <div class="gantt-heading-title">
+                <span class="gantt-title-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+                <div>
                 <p class="eyebrow">Project Gantt</p>
                 <h3>项目排期甘特图</h3>
+                </div>
               </div>
               <div class="header-actions">
                 <button class="ghost-button" type="button" data-workbench-month-prev>上月</button>
                 <button class="ghost-button" type="button" data-workbench-month-today>今天</button>
                 <button class="ghost-button" type="button" data-workbench-month-next>下月</button>
-                <button class="ghost-button" type="button" data-open-workbench-manager>管理项目</button>
                 <button class="primary-button" type="button" data-open-workbench-project>+ 新建项目</button>
               </div>
             </div>
@@ -123,9 +125,9 @@
               <button class="primary-button" type="button" data-open-workbench-task>+ 建任务</button>
             </div>
             <div class="prd-filter-row">
-              <span>类型：全部</span>
-              <span>项目：全部</span>
-              <span>只看本周到期</span>
+              <label>负责人
+                <select data-taskpool-owner></select>
+              </label>
             </div>
             <div class="prd-kanban" id="taskPoolColumns"></div>
           </section>
@@ -166,7 +168,11 @@
               </div>
               <button class="ghost-button" type="button" data-export-workbench-review>批量导出报告</button>
             </div>
-            <div class="prd-review-grid" id="reviewList"></div>
+            <div class="prd-filter-row review-toolbar">
+              <input data-review-search placeholder="输入 SKU 查找复盘项目" />
+              <button class="ghost-button" type="button" data-review-locate>定位</button>
+            </div>
+            <div class="review-sections" id="reviewList"></div>
           </section>
         </section>
 
