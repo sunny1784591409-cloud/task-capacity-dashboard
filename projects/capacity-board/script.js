@@ -8,21 +8,23 @@ const REVIEW_PAGE_SIZE = 4;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PROJECT_TYPES = ["老品风格优化项目", "品牌向优化项目-店铺/VI", "设计款营销项目", "重点视频", "TK项目"];
 const PROJECT_STATUSES = ["待开始", "进行中", "暂停", "已完成"];
-const TASK_MODULES = ["方案制定", "Amazon出图", "NPC出图", "平面排版", "NPC排版", "视频", "TK视频"];
+const TASK_MODULES = ["方案制定", "AMAZON出图", "NPC出图", "AMAZON排版", "NPC排版", "脚本制定", "视频拍摄", "视频剪辑", "视频修改定稿"];
 const TASK_STATUSES = ["待开始", "进行中", "已完成", "延期", "暂停"];
 const MANUAL_TASK_STATUSES = ["待开始", "进行中", "已完成", "暂停"];
 const PRIORITIES = ["高", "中", "低"];
 const MEMBER_GROUPS = ["摄影", "摄像", "软装", "3D", "平面"];
 const AUTO_MONTHLY_CAPACITY = 40;
-const DELIVERY_MODULES = ["Amazon出图", "NPC出图", "平面排版", "NPC排版", "视频", "TK视频"];
+const DELIVERY_MODULES = ["AMAZON出图", "NPC出图", "AMAZON排版", "NPC排版", "脚本制定", "视频拍摄", "视频剪辑", "视频修改定稿"];
 const DELIVERY_STATUSES = ["待提交", "待验收", "验收通过", "已驳回", "已完成"];
 const DELIVERY_GROUP_MAP = {
-  "Amazon出图": "出图",
+  "AMAZON出图": "出图",
   "NPC出图": "出图",
-  "平面排版": "平面",
+  "AMAZON排版": "平面",
   "NPC排版": "平面",
-  "视频": "视频",
-  "TK视频": "视频"
+  "脚本制定": "视频",
+  "视频拍摄": "视频",
+  "视频剪辑": "视频",
+  "视频修改定稿": "视频"
 };
 const DELIVERY_GROUPS = ["出图", "平面", "视频"];
 const DELIVERY_MAX_WEEK_OFFSET = 3;
@@ -73,6 +75,13 @@ const viewGroups = {
 };
 
 const routeModule = getRouteModule();
+
+const LEGACY_TASK_MODULE_MAP = {
+  "Amazon出图": "AMAZON出图",
+  "平面排版": "AMAZON排版",
+  "视频": "视频修改定稿",
+  "TK视频": "视频剪辑"
+};
 
 const WORKBENCH_SEED_TSV = `614643 Black		推背椅	老品风格优化项目	2025-09-15	2025-10-28	已完成	图片定稿,视频定稿	李芳芳	2025-09-26	2025-09-26		✅正常	肖杰	2025-10-17	2025-10-17	✅正常			程颖	2025-10-29	2025-10-28	✅正常		李锦禧	2025-11-14	2025-11-10		✅正常	2026-01-05
 春季大促			品牌向优化项目-店铺/VI	2025-12-29	2026-02-12	已完成	图片定稿	程颖					庄钟榕						程颖	2026-02-12	2026-02-11	✅正常							2026-02-13
@@ -170,6 +179,7 @@ let personalEdgeSwitchedThisDrag = false;
 let ganttResizeDrag = null;
 let ganttDragSource = null;
 let ganttMoveDragTaskId = "";
+let ganttScrollbarSync = null;
 let pendingConfirmAction = null;
 cleanupLegacyPastCalendarTasks();
 migrateVideoScheduleDefaults();
@@ -234,11 +244,11 @@ const WORKBENCH_COLUMNS = [
 
 const WORKBENCH_TASK_MAP = [
   { module: "方案制定", owner: "planOwner", plannedDate: "planDue", actualDate: "planActual", note: "planNote", progress: "planProgress", group: "软装" },
-  { module: "Amazon出图", owner: "amazonOwner", plannedDate: "amazonDue", actualDate: "amazonActual", progress: "amazonProgress", group: "摄影" },
+  { module: "AMAZON出图", owner: "amazonOwner", plannedDate: "amazonDue", actualDate: "amazonActual", progress: "amazonProgress", group: "摄影" },
   { module: "NPC出图", owner: "npcOwner", actualDate: "npcActual", progress: "npcActual", group: "摄影" },
-  { module: "平面排版", owner: "layoutOwner", plannedDate: "layoutDue", actualDate: "layoutActual", progress: "layoutProgress", group: "平面" },
+  { module: "AMAZON排版", owner: "layoutOwner", plannedDate: "layoutDue", actualDate: "layoutActual", progress: "layoutProgress", group: "平面" },
   { module: "NPC排版", owner: "layoutOwner", actualDate: "npcLayoutActual", progress: "npcLayoutActual", group: "平面" },
-  { module: "视频", owner: "videoOwner", plannedDate: "videoDue", actualDate: "videoActual", note: "videoNote", progress: "videoProgress", group: "摄像" }
+  { module: "视频修改定稿", owner: "videoOwner", plannedDate: "videoDue", actualDate: "videoActual", note: "videoNote", progress: "videoProgress", group: "摄像" }
 ];
 
 function parseWorkbenchSeedRows(tsv) {
@@ -378,7 +388,7 @@ function deliverableFromTask(task, project) {
     projectId: project.id,
     taskId: task.id,
     name: `${project.title} · ${task.module}`,
-    spec: task.module.includes("视频") ? "视频素材/成片" : "图片/页面素材",
+    spec: task.module.includes("视频") || task.module.includes("脚本") ? "视频素材/成片" : "图片/页面素材",
     status: "验收通过",
     link: ""
   });
@@ -424,8 +434,8 @@ function appendTkTemplates(projects, tasks, memberMap) {
       const task = normalizeWorkbenchTask({
         id: `t_${project.id}_${taskIndex + 1}`,
         projectId: project.id,
-        module: "TK视频",
-        title: `${project.title} · TK视频${taskIndex + 1} ${stage}`,
+        module: "视频剪辑",
+        title: `${project.title} · 视频剪辑${taskIndex + 1} ${stage}`,
         owner,
         plannedDate: `2026-06-${String(10 + taskIndex * 5 + projectIndex * 2).padStart(2, "0")}`,
         actualDate: "",
@@ -434,7 +444,7 @@ function appendTkTemplates(projects, tasks, memberMap) {
         status: "进行中"
       });
       tasks.push(task);
-      addWorkbenchMember(memberMap, owner, taskIndex === 0 ? "方案" : "视频", "TK视频");
+      addWorkbenchMember(memberMap, owner, taskIndex === 0 ? "方案" : "视频", "视频剪辑");
     });
   });
 }
@@ -447,7 +457,7 @@ function daysBetween(start, end) {
 }
 
 function amazonLineEndTaskForProject(projectId, tasks = prdTasks) {
-  return tasks.find((task) => task.projectId === projectId && task.module === "平面排版");
+  return tasks.find((task) => task.projectId === projectId && task.module === "AMAZON排版");
 }
 
 function reviewCycleDaysForProject(project, tasks = prdTasks) {
@@ -611,18 +621,24 @@ function normalizeWorkbenchProject(project) {
   };
 }
 
+function normalizeTaskModule(module) {
+  const normalized = LEGACY_TASK_MODULE_MAP[module] || module;
+  return TASK_MODULES.includes(normalized) ? normalized : "";
+}
+
 function normalizeWorkbenchTask(task) {
   const owner = String(task.owner || task.assignee || "").trim();
   const progress = String(task.progress || "").trim();
   const actualDate = toDateKey(task.actualDate) || "";
   let status = TASK_STATUSES.includes(task.status) ? task.status : "";
   if (!status) status = deriveWorkbenchTaskStatus({ owner, actualDate, progress, projectStatus: projectById(task.projectId)?.status });
+  const module = normalizeTaskModule(task.module || task.type) || "方案制定";
   return {
     id: task.id || uniqueWorkbenchId("t"),
     projectId: task.projectId || prdProjects[0]?.id || "",
     title: String(task.title || "未命名任务").trim(),
-    module: TASK_MODULES.includes(task.module || task.type) ? task.module || task.type : "方案制定",
-    type: TASK_MODULES.includes(task.module || task.type) ? task.module || task.type : "方案制定",
+    module,
+    type: module,
     status,
     owner,
     assignee: owner,
@@ -1529,6 +1545,7 @@ function renderPrdViews(options = {}) {
   renderDeliveryView();
   renderReviewView();
   renderCompletedDbView();
+  setupGanttStickyScrollbar();
   if (!options.skipGanttTodayScroll) scrollGanttToToday();
 }
 
@@ -1735,6 +1752,7 @@ function renderProjectCenterView() {
   }
   gantt.innerHTML = projects.length
     ? `
+      <div class="project-gantt-shell">
       <div class="project-gantt" style="--gantt-days:${days.length}">
         <div class="gantt-left-head">
           <span>项目/任务</span>
@@ -1746,8 +1764,47 @@ function renderProjectCenterView() {
         </div>
         ${projects.map((project) => ganttProjectRow(project, days)).join("")}
       </div>
+      <div class="gantt-sticky-scrollbar" aria-label="Gantt horizontal scrollbar" role="group">
+        <div class="gantt-sticky-scrollbar-spacer"></div>
+      </div>
+      </div>
     `
     : `<p class="empty-copy">当前月份没有实际进行或预计进行的项目。</p>`;
+}
+
+function setupGanttStickyScrollbar() {
+  if (ganttScrollbarSync?.observer) ganttScrollbarSync.observer.disconnect();
+  const container = $("#projectGantt .project-gantt");
+  const scrollbar = $("#projectGantt .gantt-sticky-scrollbar");
+  const spacer = scrollbar?.querySelector(".gantt-sticky-scrollbar-spacer");
+  if (!container || !scrollbar || !spacer) {
+    ganttScrollbarSync = null;
+    return;
+  }
+  let isSyncing = false;
+  const updateScrollbar = () => {
+    spacer.style.width = `${container.scrollWidth}px`;
+    scrollbar.classList.toggle("is-hidden", container.scrollWidth <= container.clientWidth + 1);
+    if (scrollbar.scrollLeft !== container.scrollLeft) scrollbar.scrollLeft = container.scrollLeft;
+  };
+  const syncFromContainer = () => {
+    if (isSyncing) return;
+    isSyncing = true;
+    scrollbar.scrollLeft = container.scrollLeft;
+    isSyncing = false;
+  };
+  const syncFromScrollbar = () => {
+    if (isSyncing) return;
+    isSyncing = true;
+    container.scrollLeft = scrollbar.scrollLeft;
+    isSyncing = false;
+  };
+  const observer = new ResizeObserver(updateScrollbar);
+  observer.observe(container);
+  scrollbar.addEventListener("scroll", syncFromScrollbar, { passive: true });
+  container.addEventListener("scroll", syncFromContainer, { passive: true });
+  ganttScrollbarSync = { container, scrollbar, observer };
+  window.requestAnimationFrame(updateScrollbar);
 }
 
 function prdProjectCard(project) {
@@ -1903,12 +1960,14 @@ function commitWorkbenchActualDateChange(task, dateKey, options = {}) {
 function workbenchTaskOrder(module) {
   const order = {
     "方案制定": 1,
-    "Amazon出图": 2,
+    "AMAZON出图": 2,
     "NPC出图": 2,
-    "平面排版": 3,
+    "AMAZON排版": 3,
     "NPC排版": 3,
-    "视频": 4,
-    "TK视频": 1
+    "脚本制定": 4,
+    "视频拍摄": 5,
+    "视频剪辑": 6,
+    "视频修改定稿": 7
   };
   return order[module] || 99;
 }
@@ -1917,12 +1976,16 @@ function projectScheduleSequences(project) {
   const tasks = prdTasks.filter((task) => task.projectId === project.id);
   if (project.projectType === "TK项目") return [];
   if (["设计款营销项目", "老品风格优化项目"].includes(project.projectType)) {
-    return [
-      tasks.filter((task) => ["方案制定", "Amazon出图", "平面排版"].includes(task.module)).sort((a, b) => workbenchTaskOrder(a.module) - workbenchTaskOrder(b.module)),
+    const sequences = [
+      tasks.filter((task) => ["方案制定", "AMAZON出图", "AMAZON排版"].includes(task.module)).sort((a, b) => workbenchTaskOrder(a.module) - workbenchTaskOrder(b.module)),
       tasks.filter((task) => ["方案制定", "NPC出图", "NPC排版"].includes(task.module)).sort((a, b) => workbenchTaskOrder(a.module) - workbenchTaskOrder(b.module))
-    ].filter((sequence) => sequence.length > 1);
+    ];
+    if (project.projectType === "设计款营销项目") {
+      sequences.push(tasks.filter((task) => ["脚本制定", "视频拍摄", "视频剪辑", "视频修改定稿"].includes(task.module)).sort((a, b) => workbenchTaskOrder(a.module) - workbenchTaskOrder(b.module)));
+    }
+    return sequences.filter((sequence) => sequence.length > 1);
   }
-  return [tasks.filter((task) => task.module !== "TK视频").sort((a, b) => workbenchTaskOrder(a.module) - workbenchTaskOrder(b.module))].filter((sequence) => sequence.length > 1);
+  return [tasks.sort((a, b) => workbenchTaskOrder(a.module) - workbenchTaskOrder(b.module))].filter((sequence) => sequence.length > 1);
 }
 
 function isTaskBlockedByPreviousIncomplete(task) {
@@ -2182,14 +2245,18 @@ function projectGanttLanes(project, days) {
     .sort(compareGanttTasks);
   if (["设计款营销项目", "老品风格优化项目"].includes(project.projectType)) {
     const common = projectTasks.filter((task) => task.module === "方案制定").sort(compareGanttTasks);
-    return [
-      buildGanttLane("Amazon", [...common, ...projectTasks.filter((task) => ["Amazon出图", "平面排版"].includes(task.module)).sort(compareGanttTasks)], project, days),
+    const lanes = [
+      buildGanttLane("Amazon", [...common, ...projectTasks.filter((task) => ["AMAZON出图", "AMAZON排版"].includes(task.module)).sort(compareGanttTasks)], project, days),
       buildGanttLane("NPC", [...common, ...projectTasks.filter((task) => ["NPC出图", "NPC排版"].includes(task.module)).sort(compareGanttTasks)], project, days)
     ];
+    if (project.projectType === "设计款营销项目") {
+      lanes.push(buildGanttLane("视频", projectTasks.filter((task) => ["脚本制定", "视频拍摄", "视频剪辑", "视频修改定稿"].includes(task.module)).sort(compareGanttTasks), project, days, "single"));
+    }
+    return lanes;
   }
   if (project.projectType === "TK项目") {
-    const tkTasks = projectTasks.filter((task) => task.module === "TK视频").sort(compareGanttTasks);
-    return buildPackedGanttLanes("TK视频", tkTasks, project, days, "single");
+    const tkTasks = projectTasks.filter((task) => ["脚本制定", "视频拍摄", "视频剪辑", "视频修改定稿"].includes(task.module)).sort(compareGanttTasks);
+    return buildPackedGanttLanes("视频", tkTasks, project, days, "single");
   }
   return [buildGanttLane("项目主线", projectTasks, project, days)];
 }

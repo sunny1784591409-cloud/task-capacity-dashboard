@@ -2,12 +2,17 @@
   const WORKBENCH_STORAGE_KEY = "project-workbench-v2";
   const PROJECT_TYPES = ["老品风格优化项目", "品牌向优化项目-店铺/VI", "设计款营销项目", "重点视频", "TK项目"];
   const PROJECT_STATUSES = ["待开始", "进行中", "暂停", "已完成"];
-  const TASK_MODULES = ["方案制定", "Amazon出图", "NPC出图", "平面排版", "NPC排版", "视频", "TK视频"];
+  const TASK_MODULES = ["方案制定", "AMAZON出图", "NPC出图", "AMAZON排版", "NPC排版", "脚本制定", "视频拍摄", "视频剪辑", "视频修改定稿"];
   const TASK_STATUSES = ["待开始", "进行中", "已完成", "延期", "暂停"];
   const PRIORITIES = ["高", "中", "低"];
   const MEMBER_GROUPS = ["摄影", "摄像", "软装", "3D", "平面"];
 
-  const REVIEW_TERMS = ["会议", "审核", "修改", "定稿", "确认", "验收", "交付"];
+  const LEGACY_TASK_MODULE_MAP = {
+    "Amazon出图": "AMAZON出图",
+    "平面排版": "AMAZON排版",
+    "视频": "视频修改定稿",
+    "TK视频": "视频剪辑"
+  };
 
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -57,29 +62,47 @@
     return hasAny(`${nodeName} ${typeLabel}`, ["NPC"]);
   }
 
-  function inferModule(item, typeLabel) {
+  function inferModules(item, typeLabel) {
     const nodeName = item.name;
+    const context = `${nodeName} ${typeLabel}`;
     const npc = isNpcContext(nodeName, typeLabel);
-    const tk = hasAny(typeLabel, ["TK", "TikTok"]);
-    if (tk && hasAny(nodeName, ["视频", "脚本", "拍摄", "剪辑", "COPY"])) return "TK视频";
-    if (hasAny(nodeName, ["方案"])) return "方案制定";
-    if (hasAny(nodeName, ["平面", "排版"])) return npc ? "NPC排版" : "平面排版";
-    if (hasAny(nodeName, ["图片", "出图", "3D", "AI"])) return npc ? "NPC出图" : "Amazon出图";
-    if (hasAny(nodeName, ["视频", "脚本", "拍摄", "剪辑", "COPY"])) return "视频";
-    return "";
+    const amazon = hasAny(context, ["Amazon", "AMAZON", "亚马逊"]);
+    const bothMarketplaces = (amazon && npc) || hasAny(typeLabel, ["Amazon&NPC", "AMAZON&NPC", "亚马逊&新平台", "亚马逊/NPC"]);
+    if (hasAny(nodeName, ["方案"])) return ["方案制定"];
+    if (hasAny(nodeName, ["平面", "排版"])) {
+      if (bothMarketplaces) return ["AMAZON排版", "NPC排版"];
+      return [npc && !amazon ? "NPC排版" : "AMAZON排版"];
+    }
+    if (hasAny(nodeName, ["图片", "出图", "3D", "AI"])) {
+      if (bothMarketplaces) return ["AMAZON出图", "NPC出图"];
+      return [npc && !amazon ? "NPC出图" : "AMAZON出图"];
+    }
+    if (hasAny(nodeName, ["脚本"])) return ["脚本制定"];
+    if (hasAny(nodeName, ["拍摄", "分镜", "生成"])) return ["视频拍摄"];
+    if (hasAny(nodeName, ["剪辑"])) return ["视频剪辑"];
+    if (hasAny(nodeName, ["视频", "审核", "修改", "定稿", "COPY"])) return ["视频修改定稿"];
+    return [];
+  }
+
+  function inferModule(item, typeLabel) {
+    return inferModules(item, typeLabel)[0] || "";
   }
 
   function shouldImportByDefault(item) {
-    if (item.type === "common") return !hasAny(item.name, REVIEW_TERMS);
-    return !hasAny(item.name, REVIEW_TERMS);
+    return true;
   }
 
   function moduleGroup(module) {
     if (module === "方案制定") return "软装";
-    if (module === "视频" || module === "TK视频") return "摄像";
-    if (module === "平面排版" || module === "NPC排版") return "平面";
-    if (module === "Amazon出图" || module === "NPC出图") return "摄影";
+    if (["脚本制定", "视频拍摄", "视频剪辑", "视频修改定稿"].includes(module)) return "摄像";
+    if (module === "AMAZON排版" || module === "NPC排版") return "平面";
+    if (module === "AMAZON出图" || module === "NPC出图") return "摄影";
     return "摄影";
+  }
+
+  function normalizeTaskModule(module) {
+    const normalized = LEGACY_TASK_MODULE_MAP[module] || module;
+    return TASK_MODULES.includes(normalized) ? normalized : "";
   }
 
   function buildDraft({ state, items, getTypeLabel }) {
@@ -104,7 +127,8 @@
 
     const tasks = activeItems.map((item, index) => {
       const typeLabel = item.type === "common" ? "共用环节" : getTypeLabel(item.type);
-      const module = inferModule(item, typeLabel);
+      const modules = inferModules(item, typeLabel);
+      const module = modules[0] || "";
       const shouldImport = shouldImportByDefault(item);
       const sourceKey = `${item.type}|${index}|${item.name}`;
       return {
@@ -116,11 +140,12 @@
         startDate: item.dates[0],
         plannedDate: item.dates.at(-1),
         duration: item.duration || item.dates.length,
+        modules,
         module,
         owner: "",
         status: "待开始",
         priority: "中",
-        needsReview: shouldImport && !module,
+        needsReview: shouldImport && !modules.length,
         excludedReason: shouldImport ? "" : "默认不单独录入，可勾选后手动选择模块",
         note: `来源：排期模板 / ${typeLabel} / ${item.name}；排期：${item.dates[0]} 至 ${item.dates.at(-1)}；工期：${item.duration || item.dates.length}天`
       };
@@ -152,7 +177,7 @@
   }
 
   function normalizeTask(task) {
-    const module = TASK_MODULES.includes(task.module) ? task.module : "方案制定";
+    const module = normalizeTaskModule(task.module) || "方案制定";
     const owner = text(task.owner || task.assignee);
     const plannedDate = toDateKey(task.plannedDate || task.dueDate);
     const status = TASK_STATUSES.includes(task.status) ? task.status : "待开始";
@@ -224,8 +249,75 @@
     data.members.push(normalizeMember({ name, group: moduleGroup(module), skills: module }));
   }
 
+  function taskModules(task) {
+    const modules = Array.isArray(task.modules) ? task.modules : [task.module];
+    return Array.from(new Set(modules.map(normalizeTaskModule).filter(Boolean)));
+  }
+
+  function minDate(left, right) {
+    if (!left) return right;
+    if (!right) return left;
+    return left < right ? left : right;
+  }
+
+  function maxDate(left, right) {
+    if (!left) return right;
+    if (!right) return left;
+    return left > right ? left : right;
+  }
+
+  function priorityRank(priority) {
+    return { "高": 3, "中": 2, "低": 1 }[priority] || 2;
+  }
+
+  function buildFinalTasks(draft) {
+    const grouped = new Map();
+    const finalTaskOwners = draft.finalTaskOwners || {};
+    draft.tasks
+      .filter((task) => task.shouldImport)
+      .forEach((task) => {
+        taskModules(task).forEach((module) => {
+          const key = module;
+          if (!grouped.has(key)) {
+            grouped.set(key, {
+              sourceKey: module,
+              module,
+              shouldImport: true,
+              sourceNodes: [],
+              sourceTypeLabels: [],
+              startDate: "",
+              plannedDate: "",
+              owner: "",
+              status: task.status || "待开始",
+              priority: task.priority || "中",
+              note: ""
+            });
+          }
+          const finalTask = grouped.get(key);
+          finalTask.sourceNodes.push(task.sourceNode);
+          finalTask.sourceTypeLabels.push(task.sourceTypeLabel);
+          finalTask.startDate = minDate(finalTask.startDate, task.startDate);
+          finalTask.plannedDate = maxDate(finalTask.plannedDate, task.plannedDate);
+          finalTask.priority = priorityRank(task.priority) > priorityRank(finalTask.priority) ? task.priority : finalTask.priority;
+          finalTask.owner = Array.from(new Set([finalTask.owner, task.owner].flatMap((owner) => text(owner).split(/[、,，/]/)).map(text).filter(Boolean))).join("、");
+        });
+      });
+
+    return Array.from(grouped.values()).map((task) => {
+      const nodes = Array.from(new Set(task.sourceNodes.filter(Boolean)));
+      const labels = Array.from(new Set(task.sourceTypeLabels.filter(Boolean)));
+      return {
+        ...task,
+        owner: text(finalTaskOwners[task.module]) || task.owner,
+        sourceNode: nodes.join("、"),
+        sourceTypeLabel: labels.join("、"),
+        note: `来源：排期模板 / ${labels.join("、") || "-"} / ${nodes.join("、") || "-"}；排期：${task.startDate || "-"} 至 ${task.plannedDate || "-"}`
+      };
+    });
+  }
+
   function applyDraftToWorkbench(draft) {
-    const invalidTasks = draft.tasks.filter((task) => task.shouldImport && !TASK_MODULES.includes(task.module));
+    const invalidTasks = draft.tasks.filter((task) => task.shouldImport && !taskModules(task).length);
     if (invalidTasks.length) {
       throw new Error(`存在未完成模块校对的任务：${invalidTasks.map((task) => task.sourceNode || task.title).join("、")}`);
     }
@@ -245,11 +337,10 @@
 
     let createdTasks = 0;
     let updatedTasks = 0;
-    draft.tasks
-      .filter((task) => task.shouldImport)
+    buildFinalTasks(draft)
       .forEach((task) => {
-        const module = TASK_MODULES.includes(task.module) ? task.module : "方案制定";
-        const taskId = stableId("t", `${project.id}|${task.sourceKey}`);
+        const module = normalizeTaskModule(task.module) || "方案制定";
+        const taskId = stableId("t", `${project.id}|${module}`);
         const existingIndex = data.tasks.findIndex((item) => item.id === taskId);
         const existingTask = existingIndex >= 0 ? data.tasks[existingIndex] : null;
         const next = normalizeTask({
@@ -296,6 +387,7 @@
     TASK_MODULES,
     TASK_STATUSES,
     buildDraft,
+    buildFinalTasks,
     applyDraftToWorkbench
   };
 })();
